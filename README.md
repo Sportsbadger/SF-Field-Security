@@ -19,8 +19,8 @@ This repository packages a launcher (`run_tool.py`) and the interactive Field Se
    - `explicit_custom_objects` lists any managed-package objects to include in the retrieval (comma-separated, optional).
    - `api_version` controls the package.xml API version for retrieval.
 
-## Using the Launcher (`run_tool.py`)
-The launcher handles authentication, metadata retrieval, and starting the security tool.
+## Quick start workflow
+Use the launcher to authenticate, retrieve metadata, and open the interactive security tool in one flow.
 
 1. From the repository root, run:
    ```bash
@@ -31,7 +31,7 @@ The launcher handles authentication, metadata retrieval, and starting the securi
 4. The launcher generates `sfdx-project.json`, builds a `package.xml`, retrieves metadata (profiles, permission sets, and custom objects), converts it to source format, and cleans temporary folders.
 5. After setup, it automatically starts `fs_tool_v151.py` against the prepared project folder. When you exit the tool, you can optionally trigger `deploy_changes.py` to push modifications.
 
-## FS Tool Overview and Commands
+## FS Tool overview and commands
 `fs_tool_v151.py` is an interactive CLI for analyzing and editing profile/permission set access within the retrieved project. You can pass `--project`, `--metadata`, and `--dry-run` flags when launching it directly.
 
 Within the menu you can run:
@@ -45,3 +45,13 @@ Within the menu you can run:
 - **Rollback From Backup:** Restore profile/permission-set files from backups created by previous runs.
 
 Use `--dry-run` to preview planned bulk changes without writing to disk. Reports and backups are stored in the `FS Tool Files` directory inside the project workspace.
+
+## Additional scripts
+- **`setup_project.py`** – Prepares a project folder without launching the interactive tool (useful for automated retrievals). It mirrors the metadata download steps from `run_tool.py` and can be pointed at a specific projects directory with `--projects-dir`.
+- **`deploy_changes.py`** – Deploys updates from a previously prepared workspace. Run it from the repository root to push metadata changes created by the tool.
+- **`tool_utils.py`** – Shared helpers used by the launcher and setup script (authentication checks, manifest generation, and CLI command wrappers).
+
+## Tips and troubleshooting
+- Confirm the Salesforce CLI is authenticated with the configured alias using `sf org display --target-org <alias>` if retrieval fails.
+- If you use managed packages, populate `explicit_custom_objects` in `config.ini` so their objects are included in the package manifest.
+- Keep the CLI version updated (`sf update`) to avoid API incompatibilities when retrieving or deploying metadata.
