@@ -69,8 +69,6 @@ OBJECT_PERM_SHORT = ['C', 'R', 'U', 'D', 'VA', 'MA']
 
 
 # --- Utility Functions (backup_file, find_metadata_base, _list_metadata_components, list_objects, list_fields, list_profiles, list_permission_sets, load_xml) ---
-# These functions are assumed to be correctly defined as in your previous complete script.
-# ... (utility functions here) ...
 def backup_file(src: Path, backup_dir: Path):
     backup_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, backup_dir / src.name)
@@ -176,7 +174,6 @@ def load_xml(path: Path) -> tuple[ET.ElementTree | None, ET.Element | None]:
 
 
 # --- Permission Getter Functions (get_field_permissions_from_xml_root, ..., get_object_permissions_from_xml_root) ---
-# ... (permission getter functions here) ...
 def get_field_permissions_from_xml_root(xml_root: ET.Element | None, field_api_name: str) -> tuple[bool, bool]:
     if xml_root is None: return False, False
     fp_node = xml_root.find(f".//sf:fieldPermissions[sf:field='{field_api_name}']", NS)
@@ -187,12 +184,10 @@ def get_field_permissions_from_xml_root(xml_root: ET.Element | None, field_api_n
     return readable, editable
 
 def check_for_system_overrides(xml_root: ET.Element | None, component_type: str) -> tuple[bool, str | None]:
-    """
-    Checks for 'View All Data' or 'Modify All Data' system permissions.
-
-    These permissions can override granular object/field settings.
-    Returns a tuple: (has_override_permission, permission_name).
-    """
+ #   Checks for 'View All Data' or 'Modify All Data' system permissions.
+ #   These permissions can override granular object/field settings.
+ #   Returns a tuple: (has_override_permission, permission_name).
+    
     if xml_root is None:
         return False, None
 
@@ -249,7 +244,7 @@ def get_object_permissions_from_xml_root(xml_root: ET.Element | None, object_api
     return perms
 
 # --- XML Update Functions (_find_insertion_point, update_permission, update_object_permission) ---
-# ... (XML update functions here) ...
+
 def _find_insertion_point(root: ET.Element, new_element_tag: str) -> tuple[ET.Element, int | None]:
     preferred_order = [
         'applicationVisibilities', 'categoryGroupVisibilities', 'classAccesses', 'customMetadataTypeAccesses',
@@ -286,9 +281,9 @@ def _find_insertion_point(root: ET.Element, new_element_tag: str) -> tuple[ET.El
         return root, None
 
 def update_permission(root: ET.Element, field_api: str, readable: bool, editable: bool, field_type: str = 'Unknown') -> bool:
-    """
-    Updates the FLS for a given field. If the field is a Formula, 'editable' is forced to false.
-    """
+
+#    Updates the FLS for a given field. If the field is a Formula, 'editable' is forced to false.
+
     # Formulas can only be readable, never editable.
     if field_type == 'Formula':
         editable = False
@@ -373,7 +368,6 @@ def update_object_permission(root: ET.Element, object_api: str, permissions: dic
     return True
 
 # --- Backup, Package.xml, Formatting (generate_package_xml_for_deployment, create_backup, format_access_display, format_object_perms_display, parse_object_perms_string_to_dict) ---
-# ... (these functions here) ...
 def generate_package_xml_for_deployment(profiles: list[str], permission_sets: list[str], version: str = '60.0') -> ET.ElementTree | None:
     if not profiles and not permission_sets: return None
     pkg = ET.Element('Package', xmlns=NS['sf'])
@@ -557,6 +551,7 @@ def _get_manual_field_definitions(meta: Path) -> tuple[list[str], defaultdict, s
             for target_item_name in manual_selected_project_items_names: field_new_perms[ffn][target_item_name] = (r, e)
             
     return all_selected_full_field_names, field_new_perms, manual_target_type, manual_selected_project_items_names
+    
 
 def _get_csv_field_definitions(meta: Path) -> tuple[list[str], defaultdict, list[str], list[str], dict]:
     all_selected_full_field_names = []
@@ -693,8 +688,6 @@ def _prepare_and_display_planned_fls_changes( meta: Path, all_selected_full_fiel
         
         if changes_for_this_target_display:
             click.echo(f"\n--- Target {item_type_str}: {click.style(target_item_name, bold=True)} (FLS Changes) ---")
-            
-            # <<< NEW WARNING LOGIC >>>
             has_override, override_name = check_for_system_overrides(target_specific_root, item_type_str)
             if has_override:
                 warning_message = (
@@ -702,7 +695,7 @@ def _prepare_and_display_planned_fls_changes( meta: Path, all_selected_full_fiel
                     f"The FLS changes below might be overridden (e.g., granting effective Read/Edit to all fields)."
                 )
                 click.echo(click.style(warning_message, fg='yellow', bold=True))
-            # <<< END NEW WARNING LOGIC >>>
+
             
             click.echo(hdr_line_display); click.echo('-' * len(hdr_line_display))
             for line in changes_for_this_target_display: click.echo(line)
@@ -822,7 +815,7 @@ def bulk_apply_fls(meta: Path, base_dir: Path, dry_run: bool):
 
 
 # --- Object Permission Modification Specific Helpers ---
-# ... (These are the NEW and refactored functions for object permissions) ...
+
 def _get_manual_object_permission_definitions(meta: Path) -> tuple[set[str], set[str], set[str], defaultdict]:
     definitions = defaultdict(lambda: defaultdict(dict))
     profiles_selected = set()
@@ -918,7 +911,6 @@ def _get_manual_object_permission_definitions(meta: Path) -> tuple[set[str], set
     if not all_available_items:
         click.echo(f"No {target_type_choice.lower()} found in your project."); return set(), set(), set(), definitions
 
-    # Note: Corrected the list comprehension for broader Python compatibility.
     item_choices = [questionary.Choice(f'[ALL {target_type_choice.upper()}]', value=ALL_CHOICE_VALUE)] + [questionary.Choice(i) for i in all_available_items]
     selected_items_q = questionary.checkbox(f'Select {target_type_choice} to modify permissions for:', choices=item_choices).ask()
     if not selected_items_q:
@@ -1252,8 +1244,7 @@ def modify_object_permissions(meta: Path, base_dir: Path, dry_run: bool):
 
 
 # --- Report Functions (generate_field_security_report, inspect_permission_set_access, etc.) ---
-# These are defined above or are from the previous version. Make sure they are all included.
-# _select_objects_and_fields_for_report_interactive (from v1.2)
+
 def _select_objects_and_fields_for_report_interactive(meta: Path, purpose_str: str = "the report") -> tuple[list[str], dict[str, list[str]]]:
     objects_to_process = []
     field_selection_map = {} # {'ObjectName': ['FieldName1', 'FieldName2']}
@@ -1492,7 +1483,6 @@ def inspect_permission_set_access(meta_base: Path, fs_tool_files_dir: Path):
         click.echo(f"\nPermission Set inspection CSV report saved to: {csv_filename}")
     except IOError as e: click.echo(click.style(f"Error writing CSV report: {e}", fg='red'))
 
-# audit_all_fields_by_selected_permission_sets (from v1.2)
 def audit_all_fields_by_selected_permission_sets(meta: Path, base_dir: Path):
     click.echo("\n--- Audit Field Access by Selected Permission Sets (Field-Centric Matrix) ---")
     all_available_permsets = list_permission_sets(meta)
@@ -1542,7 +1532,6 @@ def audit_all_fields_by_selected_permission_sets(meta: Path, base_dir: Path):
              try: output_filename.unlink(); click.echo(f"Cleaned up empty report file: {output_filename}")
              except OSError: pass
 
-# rollback_changes (from v1.2)
 def rollback_changes(meta: Path, base_dir: Path):
     click.echo("\n--- Rollback Changes from Backup ---")
     backups_dir = base_dir / 'fs_backups'
@@ -1585,7 +1574,6 @@ def rollback_changes(meta: Path, base_dir: Path):
     else: click.echo(click.style(f"\nRollback complete.", fg='green'))
     if summary: click.echo(f"Restored: {', '.join(summary)}.\nRemember to deploy the restored metadata.");
 
-# reverse_lookup_field_access (from v1.2)
 def reverse_lookup_field_access(meta: Path, base_dir: Path):
     click.echo("\n--- Who has access to this field? (Reverse Lookup) ---")
     _, field_selection_map = _select_objects_and_fields_for_report_interactive(meta, "this reverse lookup")
@@ -1639,7 +1627,6 @@ def reverse_lookup_field_access(meta: Path, base_dir: Path):
         click.echo(f"\nReverse lookup report saved to: {outfile}")
     except IOError as e: click.echo(click.style(f"\nError generating reverse lookup CSV: {e}", fg='red'))
 
-# generate_object_permissions_report (from v1.3)
 def generate_object_permissions_report(meta: Path, base_dir: Path):
     click.echo("\n--- Generate Object Permissions Report ---")
     all_objs_list = list_objects(meta)
@@ -1771,4 +1758,5 @@ def main(project, metadata, dry_run):
         click.echo("\n" + "="*30 + "\n")
 
 if __name__ == '__main__':
+
     main()
