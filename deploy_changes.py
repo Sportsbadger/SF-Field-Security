@@ -1,7 +1,9 @@
+"""Deploy the latest generated project changes to the target org."""
+
 from pathlib import Path
+import sys
 
 import click
-import sys
 
 from tool_utils import check_auth, read_config, run_command
 
@@ -13,7 +15,12 @@ if __name__ == '__main__':
     persistent_alias = config['persistent_alias']
 
     if not check_auth(persistent_alias, announce=False):
-        click.echo(click.style(f"Error: Not authenticated to org with alias '{persistent_alias}'.", fg='red'))
+        click.echo(
+            click.style(
+                f"Error: Not authenticated to org with alias '{persistent_alias}'.",
+                fg='red',
+            )
+        )
         click.echo("Please run 'setup_project.py' first to log in.")
         sys.exit(1)
 
@@ -28,8 +35,16 @@ if __name__ == '__main__':
     manifest_path = latest_project / 'force-app' / 'main' / 'default' / 'package.xml'
 
     if not manifest_path.exists():
-        click.echo(click.style(f"Error: No 'package.xml' found inside '{manifest_path.parent}'.", fg='red'))
-        click.echo("This means the security tool did not generate a deployment package. No changes to deploy.")
+        click.echo(
+            click.style(
+                f"Error: No 'package.xml' found inside '{manifest_path.parent}'.",
+                fg='red',
+            )
+        )
+        click.echo(
+            "This means the security tool did not generate a deployment package. "
+            "No changes to deploy."
+        )
         sys.exit(1)
 
     click.echo(click.style("\nStarting deployment...", bold=True))

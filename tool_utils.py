@@ -1,3 +1,5 @@
+"""Utility helpers for Salesforce project setup and tooling workflows."""
+
 import configparser
 import datetime
 import json
@@ -14,6 +16,7 @@ SF_NAMESPACE_URI = 'http://soap.sforce.com/2006/04/metadata'
 
 
 def run_command(command: list[str], cwd: Path = None, capture_output: bool = False, check: bool = True):
+    """Run a shell command, streaming output unless capture_output is True."""
     command_str = subprocess.list2cmdline(command)
     if not capture_output:
         click.echo(click.style(f"\n> Executing (in shell): {command_str}", fg='yellow'))
@@ -60,9 +63,12 @@ def run_command(command: list[str], cwd: Path = None, capture_output: bool = Fal
 
 
 def read_config(config_path: Path) -> dict:
+    """Read INI configuration values used throughout the tool suite."""
     config = configparser.ConfigParser()
     config.read(config_path)
-    explicit_objects_str = config.get('ToolOptions', 'explicit_custom_objects', fallback='').strip()
+    explicit_objects_str = config.get(
+        'ToolOptions', 'explicit_custom_objects', fallback=''
+    ).strip()
     return {
         'target_org_url': config.get('Salesforce', 'target_org_url', fallback=''),
         'persistent_alias': config.get('Salesforce', 'persistent_alias', fallback=''),
@@ -72,6 +78,7 @@ def read_config(config_path: Path) -> dict:
 
 
 def check_auth(alias: str, announce: bool = True) -> bool:
+    """Return True when the provided alias has an active Salesforce session."""
     if announce:
         click.echo(f"Checking for existing authentication for alias: '{alias}'...")
 
@@ -81,7 +88,10 @@ def check_auth(alias: str, announce: bool = True) -> bool:
             return False
 
         org_list = json.loads(output)
-        all_orgs = org_list.get('result', {}).get('nonScratchOrgs', []) + org_list.get('result', {}).get('scratchOrgs', [])
+        all_orgs = (
+            org_list.get('result', {}).get('nonScratchOrgs', [])
+            + org_list.get('result', {}).get('scratchOrgs', [])
+        )
         for org in all_orgs:
             aliases = []
             alias_value = org.get('alias')
@@ -101,6 +111,7 @@ def check_auth(alias: str, announce: bool = True) -> bool:
 
 
 def generate_download_manifest(manifest_path: Path, api_version: str, explicit_objects: list[str]):
+    """Create a package.xml manifest for the requested metadata components."""
     package = ET.Element('Package', xmlns=SF_NAMESPACE_URI)
     ET.register_namespace('', SF_NAMESPACE_URI)
     types = {'Profile': '*', 'PermissionSet': '*', 'CustomObject': '*'}
@@ -121,6 +132,7 @@ def generate_download_manifest(manifest_path: Path, api_version: str, explicit_o
 
 
 def create_sfdx_project_json(project_path: Path, api_version: str):
+    """Write the sfdx-project.json file configured for the provided API version."""
     project_def = {
         "packageDirectories": [{"path": "force-app", "default": True}],
         "name": "SecurityToolProject",
@@ -128,7 +140,7 @@ def create_sfdx_project_json(project_path: Path, api_version: str):
         "sfdcLoginUrl": "https://login.salesforce.com",
         "sourceApiVersion": api_version,
     }
-    with open(project_path / 'sfdx-project.json', 'w') as f:
+    with open(project_path / 'sfdx-project.json', 'w', encoding='utf-8') as f:
         json.dump(project_def, f, indent=4)
 
 
@@ -141,6 +153,7 @@ def choose_project_workspace(
     update_warning: str,
     post_delete_message: str | None = None,
 ) -> tuple[Path, str]:
+    """Select or create the project workspace directory to operate against."""
     existing_projects: list[Path] = []
     if projects_dir.is_dir():
         existing_projects = sorted(
@@ -161,7 +174,9 @@ def choose_project_workspace(
     if action == update_choice_label:
         project_choices = [p.name for p in existing_projects]
         chosen_project_name = questionary.select(
-            "Which project to update?" if action_prompt.endswith('workspace') else "Which project workspace would you like to update?",
+            "Which project to update?"
+            if action_prompt.endswith('workspace')
+            else "Which project workspace would you like to update?",
             choices=project_choices,
         ).ask()
         if chosen_project_name is None:
@@ -186,6 +201,7 @@ def choose_project_workspace(
 
 
 def print_post_setup_instructions(project_path: Path, launching_tool: bool):
+    """Display next steps after setup or tool launch completes."""
     click.echo("\n" + "=" * 50)
     if launching_tool:
         click.echo(click.style("Setup complete. Launching the security tool...", bold=True, fg='green'))

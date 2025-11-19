@@ -1,8 +1,11 @@
-import click
+"""Initial project setup and metadata download workflow."""
+
+from pathlib import Path
 import shutil
 import sys
 import zipfile
-from pathlib import Path
+
+import click
 
 from tool_utils import (
     check_auth,
@@ -34,8 +37,24 @@ if __name__ == '__main__':
     )
 
     if not check_auth(persistent_alias):
-        click.echo(click.style("\nAction Required: A browser window will open for authentication.", bold=True))
-        if not run_command(['sf', 'org', 'login', 'web', '--instance-url', org_url, '--alias', persistent_alias]):
+        click.echo(
+            click.style(
+                "\nAction Required: A browser window will open for authentication.",
+                bold=True,
+            )
+        )
+        if not run_command(
+            [
+                'sf',
+                'org',
+                'login',
+                'web',
+                '--instance-url',
+                org_url,
+                '--alias',
+                persistent_alias,
+            ]
+        ):
             sys.exit(1)
 
     create_sfdx_project_json(project_path, config['api_version'])
@@ -45,7 +64,20 @@ if __name__ == '__main__':
     temp_retrieve_dir = project_path / "temp_mdapi_retrieve"
     mdapi_source_path = project_path / "mdapi_source"
 
-    if not run_command(['sf', 'project', 'retrieve', 'start', '--manifest', str(manifest_path), '--target-org', persistent_alias, '--target-metadata-dir', str(temp_retrieve_dir)]):
+    if not run_command(
+        [
+            'sf',
+            'project',
+            'retrieve',
+            'start',
+            '--manifest',
+            str(manifest_path),
+            '--target-org',
+            persistent_alias,
+            '--target-metadata-dir',
+            str(temp_retrieve_dir),
+        ]
+    ):
         sys.exit(1)
         
     zip_path = temp_retrieve_dir / 'unpackaged.zip'
@@ -55,13 +87,24 @@ if __name__ == '__main__':
             zip_ref.extractall(mdapi_source_path)
         click.echo(click.style("✓ Metadata unzipped.", fg='green'))
     else:
-        click.echo(click.style("Error: Could not find 'unpackaged.zip'.", fg='red')); sys.exit(1)
+        click.echo(click.style("Error: Could not find 'unpackaged.zip'.", fg='red'))
+        sys.exit(1)
     
     click.echo("\nConverting metadata from MDAPI format to Source format...")
     force_app_path = project_path / 'force-app'
-    convert_command = ['sf', 'project', 'convert', 'mdapi', '--root-dir', str(mdapi_source_path), '--output-dir', str(force_app_path)]
+    convert_command = [
+        'sf',
+        'project',
+        'convert',
+        'mdapi',
+        '--root-dir',
+        str(mdapi_source_path),
+        '--output-dir',
+        str(force_app_path),
+    ]
     if not run_command(convert_command, cwd=project_path):
-        click.echo(click.style("Metadata conversion failed!", fg='red')); sys.exit(1)
+        click.echo(click.style("Metadata conversion failed!", fg='red'))
+        sys.exit(1)
 
     click.echo(click.style("✓ Metadata successfully converted.", fg='green'))
     shutil.rmtree(temp_retrieve_dir)
