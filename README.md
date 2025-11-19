@@ -4,7 +4,10 @@ This repository packages a launcher (`run_tool.py`) and the interactive Field Se
 
 ## Prerequisites
 - **Python 3.10+** with the following libraries installed: `click`, `questionary`, and `lxml`. Install them with `pip install click questionary lxml`.
-- **Salesforce CLI (`sf`)** installed and available on your `PATH`; it is used for authentication, metadata retrieval, and project conversion steps.
+- **Salesforce CLI (`sf`)** installed and available on your `PATH`; it is used for authentication, metadata retrieval, and project conversion steps. Download the CLI from [Salesforce's installation page](https://developer.salesforce.com/tools/salesforcecli) and follow the installer or package-manager instructions for your operating system. After installation, ensure the `sf` binary is on your shell `PATH` so the launcher scripts can invoke it:
+  - **macOS/Linux:** if you installed with a package manager (e.g., `brew install sf` or `npm install --global @salesforce/cli`), the binary is typically placed in `/usr/local/bin` or your Node global bin folder. Confirm by running `which sf`; if the command is not found, add the install directory to your `PATH` in `~/.bashrc`, `~/.zshrc`, etc., for example `export PATH="$PATH:/usr/local/bin"`.
+  - **Windows:** the installer adds the CLI to the system `PATH` automatically. If you used a ZIP download, add the folder containing `sf.cmd` to `PATH` via **System Properties → Environment Variables** so that `sf --version` works in a new Command Prompt or PowerShell window.
+  - Verify with `sf --version`; if it prints the CLI version, the tool will be able to authenticate and retrieve metadata.
 - **Access to the target Salesforce org** with browser-based login capability; the tool launches a web login if no active session exists.
 
 ## Installation and Setup
