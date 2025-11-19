@@ -1,11 +1,13 @@
-from pathlib import Path
+"""Command-line entry point for running the Salesforce security tool."""
 
-import click
-import questionary
+from pathlib import Path
 import shutil
 import subprocess
 import sys
 import zipfile
+
+import click
+import questionary
 
 from tool_utils import (
     check_auth,
@@ -36,8 +38,24 @@ if __name__ == '__main__':
     )
 
     if not check_auth(persistent_alias):
-        click.echo(click.style("\nAction Required: A browser window will open for authentication.", bold=True))
-        if not run_command(['sf', 'org', 'login', 'web', '--instance-url', org_url, '--alias', persistent_alias]):
+        click.echo(
+            click.style(
+                "\nAction Required: A browser window will open for authentication.",
+                bold=True,
+            )
+        )
+        if not run_command(
+            [
+                'sf',
+                'org',
+                'login',
+                'web',
+                '--instance-url',
+                org_url,
+                '--alias',
+                persistent_alias,
+            ]
+        ):
             sys.exit(1)
 
     create_sfdx_project_json(project_path, config['api_version'])
@@ -47,12 +65,20 @@ if __name__ == '__main__':
     temp_retrieve_dir = project_path / "temp_mdapi_retrieve"
     mdapi_source_path = project_path / "mdapi_source"
 
-    if not run_command([
-        'sf', 'project', 'retrieve', 'start',
-        '--manifest', str(manifest_path),
-        '--target-org', persistent_alias,
-        '--target-metadata-dir', str(temp_retrieve_dir)
-    ]):
+    if not run_command(
+        [
+            'sf',
+            'project',
+            'retrieve',
+            'start',
+            '--manifest',
+            str(manifest_path),
+            '--target-org',
+            persistent_alias,
+            '--target-metadata-dir',
+            str(temp_retrieve_dir),
+        ]
+    ):
         sys.exit(1)
 
     zip_path = temp_retrieve_dir / 'unpackaged.zip'
@@ -64,7 +90,16 @@ if __name__ == '__main__':
         sys.exit(1)
 
     force_app_path = project_path / 'force-app'
-    convert_command = ['sf', 'project', 'convert', 'mdapi', '--root-dir', str(mdapi_source_path), '--output-dir', str(force_app_path)]
+    convert_command = [
+        'sf',
+        'project',
+        'convert',
+        'mdapi',
+        '--root-dir',
+        str(mdapi_source_path),
+        '--output-dir',
+        str(force_app_path),
+    ]
     if not run_command(convert_command, cwd=project_path):
         click.echo(click.style("Metadata conversion failed!", fg='red'))
         sys.exit(1)
@@ -76,10 +111,15 @@ if __name__ == '__main__':
 
     tool_script_path = script_dir / 'fs_tool_v151.py'
     if not tool_script_path.exists():
-        click.echo(click.style(f"Error: The security tool script '{tool_script_path.name}' was not found in this directory.", fg='red'))
+        click.echo(
+            click.style(
+                f"Error: The security tool script '{tool_script_path.name}' was not found in this directory.",
+                fg='red',
+            )
+        )
         sys.exit(1)
 
-    subprocess.run([sys.executable, str(tool_script_path), '--project', str(project_path)])
+    subprocess.run([sys.executable, str(tool_script_path), '--project', str(project_path)], check=False)
 
     click.echo("\n" + "=" * 50)
     click.echo(click.style("Security tool session finished.", bold=True))
@@ -87,10 +127,15 @@ if __name__ == '__main__':
     if questionary.confirm("Do you want to run the deployment script now?", default=False).ask():
         deploy_script_path = script_dir / 'deploy_changes.py'
         if not deploy_script_path.exists():
-            click.echo(click.style(f"Error: The deployment script '{deploy_script_path.name}' was not found.", fg='red'))
+            click.echo(
+                click.style(
+                    f"Error: The deployment script '{deploy_script_path.name}' was not found.",
+                    fg='red',
+                )
+            )
         else:
             click.echo(click.style("\nLaunching deployment script...", fg='cyan'))
-            subprocess.run([sys.executable, str(deploy_script_path)])
+            subprocess.run([sys.executable, str(deploy_script_path)], check=False)
     else:
         click.echo("\nDeployment skipped.")
         click.echo("To deploy your changes later, run:")
