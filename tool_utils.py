@@ -152,7 +152,8 @@ def choose_project_workspace(
     update_choice_label: str,
     update_warning: str,
     post_delete_message: str | None = None,
-) -> tuple[Path, str]:
+    allow_use_without_refresh: bool = False,
+) -> tuple[Path, str, bool]:
     """Select or create the project workspace directory to operate against."""
     existing_projects: list[Path] = []
     if projects_dir.is_dir():
@@ -185,19 +186,37 @@ def choose_project_workspace(
 
         project_path = projects_dir / chosen_project_name
         click.echo(f"\nSelected existing project: {project_path}")
-        click.echo(click.style(update_warning, fg='yellow'))
-        force_app_path_to_delete = project_path / 'force-app'
-        if force_app_path_to_delete.exists():
-            shutil.rmtree(force_app_path_to_delete)
-            if post_delete_message:
-                click.echo(post_delete_message)
-        return project_path, action
+        refresh_metadata = True
+        if allow_use_without_refresh:
+            proceed_choice = questionary.select(
+                "How would you like to proceed with this existing project?",
+                choices=[
+                    "Refresh metadata (replace local files)",
+                    "Use existing project without refreshing",
+                ],
+            ).ask()
+            if proceed_choice is None:
+                click.echo("Operation cancelled.")
+                sys.exit(0)
+            refresh_metadata = proceed_choice.startswith("Refresh metadata")
+
+        if refresh_metadata:
+            click.echo(click.style(update_warning, fg='yellow'))
+            force_app_path_to_delete = project_path / 'force-app'
+            if force_app_path_to_delete.exists():
+                shutil.rmtree(force_app_path_to_delete)
+                if post_delete_message:
+                    click.echo(post_delete_message)
+        else:
+            click.echo("Using existing project without refreshing metadata.")
+
+        return project_path, action, refresh_metadata
 
     ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     project_path = projects_dir / f"{ts}_{persistent_alias}"
     project_path.mkdir(parents=True, exist_ok=True)
     click.echo(f"\nCreated new project directory at: {project_path}")
-    return project_path, action
+    return project_path, action, True
 
 
 def print_post_setup_instructions(project_path: Path, launching_tool: bool):

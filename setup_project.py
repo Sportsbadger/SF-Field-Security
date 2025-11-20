@@ -26,7 +26,7 @@ if __name__ == '__main__':
     persistent_alias = config['persistent_alias']
 
     projects_dir = script_dir / 'projects'
-    project_path, _action = choose_project_workspace(
+    project_path, _action, _refresh_metadata = choose_project_workspace(
         projects_dir,
         persistent_alias,
         "Choose an action for your project workspace:",
