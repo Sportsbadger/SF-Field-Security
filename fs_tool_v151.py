@@ -1473,9 +1473,18 @@ def inspect_permission_set_access(meta_base: Path, fs_tool_files_dir: Path):
         with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
             fieldnames = ['PermissionSetName', 'PermissionType', 'ObjectName', 'FieldName', 'FieldPermissions', 'ObjCreate', 'ObjRead', 'ObjUpdate', 'ObjDelete', 'ObjViewAll', 'ObjModifyAll', 'UserPermissionName']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames); writer.writeheader()
+            object_perm_field_map = {
+                'allowCreate': 'ObjCreate',
+                'allowRead': 'ObjRead',
+                'allowEdit': 'ObjUpdate',
+                'allowDelete': 'ObjDelete',
+                'viewAllRecords': 'ObjViewAll',
+                'modifyAllRecords': 'ObjModifyAll',
+            }
             for ps_name, data in all_permset_data_for_inspection.items():
                 for obj_name, obj_perms_val in data["objects"].items():
-                    writer.writerow({'PermissionSetName': ps_name, 'PermissionType': 'Object', 'ObjectName': obj_name, **{f"Obj{k.replace('allow','').replace('Records','')}": v for k,v in obj_perms_val.items()}})
+                    mapped_obj_perms = {object_perm_field_map[k]: v for k, v in obj_perms_val.items() if k in object_perm_field_map}
+                    writer.writerow({'PermissionSetName': ps_name, 'PermissionType': 'Object', 'ObjectName': obj_name, **mapped_obj_perms})
                 for field_full_name, field_perms_val in data["fields"].items():
                     obj_part, field_part = field_full_name.split('.', 1) if '.' in field_full_name else (field_full_name, '')
                     writer.writerow({'PermissionSetName': ps_name, 'PermissionType': 'Field', 'ObjectName': obj_part, 'FieldName': field_part, 'FieldPermissions': format_access_display(field_perms_val['R'], field_perms_val['E'])})
