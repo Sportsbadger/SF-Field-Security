@@ -28,84 +28,88 @@ if __name__ == '__main__':
     persistent_alias = config['persistent_alias']
 
     projects_dir = script_dir / 'projects'
-    project_path, _action = choose_project_workspace(
+    project_path, _action, refresh_metadata = choose_project_workspace(
         projects_dir,
         persistent_alias,
         "Choose an action:",
         "Create a new project workspace",
         "Update an existing project workspace",
         "Refreshing metadata... This will replace the 'force-app' folder.",
+        allow_use_without_refresh=True,
     )
 
-    if not check_auth(persistent_alias):
-        click.echo(
-            click.style(
-                "\nAction Required: A browser window will open for authentication.",
-                bold=True,
+    if refresh_metadata:
+        if not check_auth(persistent_alias):
+            click.echo(
+                click.style(
+                    "\nAction Required: A browser window will open for authentication.",
+                    bold=True,
+                )
             )
-        )
+            if not run_command(
+                [
+                    'sf',
+                    'org',
+                    'login',
+                    'web',
+                    '--instance-url',
+                    org_url,
+                    '--alias',
+                    persistent_alias,
+                ]
+            ):
+                sys.exit(1)
+
+        create_sfdx_project_json(project_path, config['api_version'])
+        manifest_path = project_path / 'package.xml'
+        generate_download_manifest(manifest_path, config['api_version'], config['explicit_custom_objects'])
+
+        temp_retrieve_dir = project_path / "temp_mdapi_retrieve"
+        mdapi_source_path = project_path / "mdapi_source"
+
         if not run_command(
             [
                 'sf',
-                'org',
-                'login',
-                'web',
-                '--instance-url',
-                org_url,
-                '--alias',
+                'project',
+                'retrieve',
+                'start',
+                '--manifest',
+                str(manifest_path),
+                '--target-org',
                 persistent_alias,
+                '--target-metadata-dir',
+                str(temp_retrieve_dir),
             ]
         ):
             sys.exit(1)
 
-    create_sfdx_project_json(project_path, config['api_version'])
-    manifest_path = project_path / 'package.xml'
-    generate_download_manifest(manifest_path, config['api_version'], config['explicit_custom_objects'])
+        zip_path = temp_retrieve_dir / 'unpackaged.zip'
+        if zip_path.exists():
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(mdapi_source_path)
+        else:
+            click.echo(click.style("Error: Could not find 'unpackaged.zip'.", fg='red'))
+            sys.exit(1)
 
-    temp_retrieve_dir = project_path / "temp_mdapi_retrieve"
-    mdapi_source_path = project_path / "mdapi_source"
-
-    if not run_command(
-        [
+        force_app_path = project_path / 'force-app'
+        convert_command = [
             'sf',
             'project',
-            'retrieve',
-            'start',
-            '--manifest',
-            str(manifest_path),
-            '--target-org',
-            persistent_alias,
-            '--target-metadata-dir',
-            str(temp_retrieve_dir),
+            'convert',
+            'mdapi',
+            '--root-dir',
+            str(mdapi_source_path),
+            '--output-dir',
+            str(force_app_path),
         ]
-    ):
-        sys.exit(1)
+        if not run_command(convert_command, cwd=project_path):
+            click.echo(click.style("Metadata conversion failed!", fg='red'))
+            sys.exit(1)
 
-    zip_path = temp_retrieve_dir / 'unpackaged.zip'
-    if zip_path.exists():
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(mdapi_source_path)
+        shutil.rmtree(temp_retrieve_dir)
+        shutil.rmtree(mdapi_source_path)
     else:
-        click.echo(click.style("Error: Could not find 'unpackaged.zip'.", fg='red'))
-        sys.exit(1)
-
-    force_app_path = project_path / 'force-app'
-    convert_command = [
-        'sf',
-        'project',
-        'convert',
-        'mdapi',
-        '--root-dir',
-        str(mdapi_source_path),
-        '--output-dir',
-        str(force_app_path),
-    ]
-    if not run_command(convert_command, cwd=project_path):
-        click.echo(click.style("Metadata conversion failed!", fg='red'))
-        sys.exit(1)
-
-    shutil.rmtree(temp_retrieve_dir)
-    shutil.rmtree(mdapi_source_path)
+        click.echo(click.style("Skipping metadata refresh. Using existing project files.", fg='green'))
 
     print_post_setup_instructions(project_path, launching_tool=True)
 
