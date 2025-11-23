@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -15,11 +17,54 @@ import questionary
 SF_NAMESPACE_URI = 'http://soap.sforce.com/2006/04/metadata'
 
 
-def run_command(command: list[str], cwd: Path = None, capture_output: bool = False, check: bool = True):
-    """Run a shell command, streaming output unless capture_output is True."""
+@dataclass
+class CommandResult:
+    """Outcome of executing a subprocess command."""
+
+    success: bool
+    returncode: int | None
+    stdout: str | None
+    duration_seconds: float
+
+
+@dataclass
+class ConfigSettings:
+    """Validated configuration values for project and org settings."""
+
+    target_org_url: str
+    persistent_alias: str
+    explicit_custom_objects: list[str]
+    api_version: str
+
+
+@dataclass
+class MetadataRetrievalPlan:
+    """Paths used when retrieving and converting metadata."""
+
+    project_path: Path
+    manifest_path: Path
+    temp_retrieve_dir: Path
+    mdapi_source_path: Path
+    force_app_path: Path
+
+
+def run_command(
+    command: list[str],
+    cwd: Path = None,
+    capture_output: bool = False,
+    check: bool = True,
+) -> CommandResult:
+    """Run a shell command with structured logging and status reporting."""
+
     command_str = subprocess.list2cmdline(command)
+    start = datetime.datetime.now()
     if not capture_output:
-        click.echo(click.style(f"\n> Executing (in shell): {command_str}", fg='yellow'))
+        click.echo(
+            click.style(
+                f"\n[{start:%H:%M:%S}] > Executing (in shell): {command_str}",
+                fg='yellow',
+            )
+        )
 
     try:
         if capture_output:
@@ -31,7 +76,16 @@ def run_command(command: list[str], cwd: Path = None, capture_output: bool = Fal
                 check=check,
                 cwd=cwd,
             )
-            return result.stdout
+            duration = (datetime.datetime.now() - start).total_seconds()
+            success = result.returncode == 0
+            if not success:
+                click.echo(
+                    click.style(
+                        f"✗ Command returned non-zero exit code {result.returncode}.",
+                        fg='red',
+                    )
+                )
+            return CommandResult(success, result.returncode, result.stdout, duration)
 
         process = subprocess.Popen(
             command_str,
@@ -42,39 +96,79 @@ def run_command(command: list[str], cwd: Path = None, capture_output: bool = Fal
             cwd=cwd,
             shell=True,
         )
+        stdout_lines: list[str] = []
         for line in iter(process.stdout.readline, ''):
+            stdout_lines.append(line)
             print(line, end='')
         process.wait()
-        if process.returncode != 0:
+        duration = (datetime.datetime.now() - start).total_seconds()
+        if process.returncode != 0 and check:
             raise subprocess.CalledProcessError(process.returncode, command)
 
+        success = process.returncode == 0
         if not capture_output:
-            click.echo(click.style("✓ Command successful.", fg='green'))
-        return True
+            click.echo(
+                click.style(
+                    f"✓ Command successful. (took {duration:.2f}s)", fg='green'
+                )
+                if success
+                else click.style(
+                    f"✗ Command returned code {process.returncode} (took {duration:.2f}s)",
+                    fg='red',
+                )
+            )
+        return CommandResult(success, process.returncode, ''.join(stdout_lines), duration)
 
     except subprocess.CalledProcessError as e:
+        duration = (datetime.datetime.now() - start).total_seconds()
         if not capture_output:
-            click.echo(click.style("✗ Command failed.", fg='red'))
-        return e.stdout if capture_output else False
-    except Exception as e:
+            click.echo(
+                click.style(
+                    f"✗ Command failed after {duration:.2f}s (exit {e.returncode}).",
+                    fg='red',
+                )
+            )
+        return CommandResult(False, e.returncode, e.stdout, duration)
+    except Exception as e:  # pragma: no cover - defensive
+        duration = (datetime.datetime.now() - start).total_seconds()
         if not capture_output:
-            click.echo(click.style(f"✗ An unexpected error occurred: {e}", fg='red'))
-        return False
+            click.echo(
+                click.style(
+                    f"✗ An unexpected error occurred after {duration:.2f}s: {e}",
+                    fg='red',
+                )
+            )
+        return CommandResult(False, None, None, duration)
 
 
-def read_config(config_path: Path) -> dict:
+def read_config(config_path: Path) -> ConfigSettings:
     """Read INI configuration values used throughout the tool suite."""
+
     config = configparser.ConfigParser()
     config.read(config_path)
     explicit_objects_str = config.get(
         'ToolOptions', 'explicit_custom_objects', fallback=''
     ).strip()
-    return {
-        'target_org_url': config.get('Salesforce', 'target_org_url', fallback=''),
-        'persistent_alias': config.get('Salesforce', 'persistent_alias', fallback=''),
-        'explicit_custom_objects': [obj.strip() for obj in explicit_objects_str.split(',') if obj.strip()],
-        'api_version': config.get('ToolOptions', 'api_version', fallback='60.0'),
-    }
+    settings = ConfigSettings(
+        target_org_url=config.get('Salesforce', 'target_org_url', fallback='').strip(),
+        persistent_alias=config.get('Salesforce', 'persistent_alias', fallback='').strip(),
+        explicit_custom_objects=[
+            obj.strip() for obj in explicit_objects_str.split(',') if obj.strip()
+        ],
+        api_version=config.get('ToolOptions', 'api_version', fallback='60.0').strip(),
+    )
+
+    missing_fields: list[str] = []
+    if not settings.target_org_url:
+        missing_fields.append('Salesforce.target_org_url')
+    if not settings.persistent_alias:
+        missing_fields.append('Salesforce.persistent_alias')
+    if missing_fields:
+        raise click.ClickException(
+            "Missing required configuration values: " + ', '.join(missing_fields)
+        )
+
+    return settings
 
 
 def check_auth(alias: str, announce: bool = True) -> bool:
@@ -83,7 +177,8 @@ def check_auth(alias: str, announce: bool = True) -> bool:
         click.echo(f"Checking for existing authentication for alias: '{alias}'...")
 
     try:
-        output = run_command(['sf', 'org', 'list', '--json'], capture_output=True, check=False)
+        result = run_command(['sf', 'org', 'list', '--json'], capture_output=True, check=False)
+        output = result.stdout or ''
         if not output:
             return False
 
@@ -102,8 +197,18 @@ def check_auth(alias: str, announce: bool = True) -> bool:
                 if announce:
                     click.echo(click.style("✓ Found active session.", fg='green'))
                 return True
-    except (json.JSONDecodeError, Exception):
-        pass
+    except json.JSONDecodeError as exc:
+        click.echo(
+            click.style(
+                f"Unable to parse Salesforce org list output: {exc}", fg='red'
+            )
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        click.echo(
+            click.style(
+                f"Unexpected error while checking authentication: {exc}", fg='red'
+            )
+        )
 
     if announce:
         click.echo(click.style("No active session found. A new login will be required.", fg='yellow'))
@@ -129,6 +234,82 @@ def generate_download_manifest(manifest_path: Path, api_version: str, explicit_o
     if hasattr(ET, 'indent'):
         ET.indent(tree, space="    ")
     tree.write(manifest_path, encoding='UTF-8', xml_declaration=True)
+
+
+def build_metadata_plan(project_path: Path) -> MetadataRetrievalPlan:
+    """Construct a plan containing all metadata-related directories for a project."""
+
+    return MetadataRetrievalPlan(
+        project_path=project_path,
+        manifest_path=project_path / 'package.xml',
+        temp_retrieve_dir=project_path / 'temp_mdapi_retrieve',
+        mdapi_source_path=project_path / 'mdapi_source',
+        force_app_path=project_path / 'force-app',
+    )
+
+
+def retrieve_and_convert_metadata(
+    plan: MetadataRetrievalPlan,
+    api_version: str,
+    explicit_custom_objects: list[str],
+    target_org_alias: str,
+) -> bool:
+    """Download metadata and convert it into source format based on a plan."""
+
+    create_sfdx_project_json(plan.project_path, api_version)
+    generate_download_manifest(plan.manifest_path, api_version, explicit_custom_objects)
+
+    retrieve_result = run_command(
+        [
+            'sf',
+            'project',
+            'retrieve',
+            'start',
+            '--manifest',
+            str(plan.manifest_path),
+            '--target-org',
+            target_org_alias,
+            '--target-metadata-dir',
+            str(plan.temp_retrieve_dir),
+        ]
+    )
+    if not retrieve_result.success:
+        return False
+
+    zip_path = plan.temp_retrieve_dir / 'unpackaged.zip'
+    if zip_path.exists():
+        click.echo("Unzipping downloaded MDAPI metadata...")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(plan.mdapi_source_path)
+        click.echo(click.style("✓ Metadata unzipped.", fg='green'))
+    else:
+        click.echo(click.style("Error: Could not find 'unpackaged.zip'.", fg='red'))
+        return False
+
+    click.echo("\nConverting metadata from MDAPI format to Source format...")
+    convert_result = run_command(
+        [
+            'sf',
+            'project',
+            'convert',
+            'mdapi',
+            '--root-dir',
+            str(plan.mdapi_source_path),
+            '--output-dir',
+            str(plan.force_app_path),
+        ],
+        cwd=plan.project_path,
+    )
+    if not convert_result.success:
+        click.echo(click.style("Metadata conversion failed!", fg='red'))
+        return False
+
+    cleanup_paths = [plan.temp_retrieve_dir, plan.mdapi_source_path]
+    for path in cleanup_paths:
+        shutil.rmtree(path, ignore_errors=True)
+
+    click.echo(click.style("✓ Metadata successfully converted.", fg='green'))
+    return True
 
 
 def create_sfdx_project_json(project_path: Path, api_version: str):

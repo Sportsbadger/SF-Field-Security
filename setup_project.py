@@ -1,19 +1,17 @@
 """Initial project setup and metadata download workflow."""
 
 from pathlib import Path
-import shutil
 import sys
-import zipfile
 
 import click
 
 from tool_utils import (
+    build_metadata_plan,
     check_auth,
     choose_project_workspace,
-    create_sfdx_project_json,
-    generate_download_manifest,
     print_post_setup_instructions,
     read_config,
+    retrieve_and_convert_metadata,
     run_command,
 )
 
@@ -22,8 +20,8 @@ if __name__ == '__main__':
 
     script_dir = Path(__file__).parent
     config = read_config(script_dir / 'config.ini')
-    org_url = config['target_org_url']
-    persistent_alias = config['persistent_alias']
+    org_url = config.target_org_url
+    persistent_alias = config.persistent_alias
 
     projects_dir = script_dir / 'projects'
     project_path, _action, _refresh_metadata = choose_project_workspace(
@@ -43,7 +41,7 @@ if __name__ == '__main__':
                 bold=True,
             )
         )
-        if not run_command(
+        login_result = run_command(
             [
                 'sf',
                 'org',
@@ -54,60 +52,17 @@ if __name__ == '__main__':
                 '--alias',
                 persistent_alias,
             ]
-        ):
+        )
+        if not login_result.success:
             sys.exit(1)
 
-    create_sfdx_project_json(project_path, config['api_version'])
-    manifest_path = project_path / 'package.xml'
-    generate_download_manifest(manifest_path, config['api_version'], config['explicit_custom_objects'])
-    
-    temp_retrieve_dir = project_path / "temp_mdapi_retrieve"
-    mdapi_source_path = project_path / "mdapi_source"
-
-    if not run_command(
-        [
-            'sf',
-            'project',
-            'retrieve',
-            'start',
-            '--manifest',
-            str(manifest_path),
-            '--target-org',
-            persistent_alias,
-            '--target-metadata-dir',
-            str(temp_retrieve_dir),
-        ]
+    metadata_plan = build_metadata_plan(project_path)
+    if not retrieve_and_convert_metadata(
+        metadata_plan,
+        config.api_version,
+        config.explicit_custom_objects,
+        persistent_alias,
     ):
         sys.exit(1)
-        
-    zip_path = temp_retrieve_dir / 'unpackaged.zip'
-    if zip_path.exists():
-        click.echo("Unzipping downloaded MDAPI metadata...")
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(mdapi_source_path)
-        click.echo(click.style("✓ Metadata unzipped.", fg='green'))
-    else:
-        click.echo(click.style("Error: Could not find 'unpackaged.zip'.", fg='red'))
-        sys.exit(1)
-    
-    click.echo("\nConverting metadata from MDAPI format to Source format...")
-    force_app_path = project_path / 'force-app'
-    convert_command = [
-        'sf',
-        'project',
-        'convert',
-        'mdapi',
-        '--root-dir',
-        str(mdapi_source_path),
-        '--output-dir',
-        str(force_app_path),
-    ]
-    if not run_command(convert_command, cwd=project_path):
-        click.echo(click.style("Metadata conversion failed!", fg='red'))
-        sys.exit(1)
-
-    click.echo(click.style("✓ Metadata successfully converted.", fg='green'))
-    shutil.rmtree(temp_retrieve_dir)
-    shutil.rmtree(mdapi_source_path)
 
     print_post_setup_instructions(project_path, launching_tool=False)
