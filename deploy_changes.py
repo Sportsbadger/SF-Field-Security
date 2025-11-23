@@ -12,7 +12,7 @@ if __name__ == '__main__':
 
     script_dir = Path(__file__).parent
     config = read_config(script_dir / 'config.ini')
-    persistent_alias = config['persistent_alias']
+    persistent_alias = config.persistent_alias
 
     if not check_auth(persistent_alias, announce=False):
         click.echo(
@@ -55,7 +55,8 @@ if __name__ == '__main__':
         '--target-org', persistent_alias
     ]
 
-    if not run_command(deploy_command, cwd=latest_project):
+    deploy_result = run_command(deploy_command, cwd=latest_project)
+    if not deploy_result.success:
         click.echo(click.style("Deployment failed. Please review the output above.", fg='red'))
     else:
         click.echo(click.style("\n✓ Deployment Succeeded.", bold=True, fg='green'))
