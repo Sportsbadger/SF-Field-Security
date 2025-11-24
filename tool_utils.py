@@ -98,8 +98,12 @@ def run_command(
         )
         stdout_lines: list[str] = []
         for line in iter(process.stdout.readline, ''):
-            stdout_lines.append(line)
-            print(line, end='')
+            # Some external tools use carriage returns to redraw progress lines, which can
+            # create a flashing effect in the console. Strip carriage returns so output is
+            # appended normally without screen blanks.
+            sanitized_line = line.replace('\r', '')
+            stdout_lines.append(sanitized_line)
+            print(sanitized_line, end='')
         process.wait()
         duration = (datetime.datetime.now() - start).total_seconds()
         if process.returncode != 0 and check:
