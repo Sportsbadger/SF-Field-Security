@@ -1505,14 +1505,23 @@ def audit_all_fields_by_selected_permission_sets(meta: Path, base_dir: Path):
     permset_xml_cache = {ps_name: load_xml(meta/'permissionsets'/f'{ps_name}{PERMISSIONSET_SUFFIX}')[1] for ps_name in permsets_for_report_columns}
     click.echo("\nIdentifying fields accessible by the selected permission sets...")
     fields_to_include_in_report = []
+    field_permission_cache = {}
     all_objects_in_project = list_objects(meta)
     total_eligible_fields_scanned = 0
     for obj_name in all_objects_in_project:
         for fname, ftype in list_fields(meta, obj_name):
             total_eligible_fields_scanned += 1
             full_field_api_name = f"{obj_name}.{fname}"
-            if any(get_effective_field_permissions_from_ps_root(permset_xml_cache.get(ps_name), obj_name, full_field_api_name)[0] or get_effective_field_permissions_from_ps_root(permset_xml_cache.get(ps_name), obj_name, full_field_api_name)[1] for ps_name in permsets_for_report_columns if permset_xml_cache.get(ps_name) is not None):
-                fields_to_include_in_report.append((obj_name, fname, ftype))
+            for ps_name in permsets_for_report_columns:
+                ps_root = permset_xml_cache.get(ps_name)
+                if ps_root is None: continue
+                cached_perms = field_permission_cache.get((ps_name, full_field_api_name))
+                if cached_perms is None:
+                    cached_perms = get_effective_field_permissions_from_ps_root(ps_root, obj_name, full_field_api_name)
+                    field_permission_cache[(ps_name, full_field_api_name)] = cached_perms
+                if cached_perms[0] or cached_perms[1]:
+                    fields_to_include_in_report.append((obj_name, fname, ftype))
+                    break
             if total_eligible_fields_scanned > 0 and total_eligible_fields_scanned % 500 == 0: click.echo(f"  Scanned {total_eligible_fields_scanned} eligible fields... Found {len(fields_to_include_in_report)} relevant so far.")
     if total_eligible_fields_scanned == 0: click.echo("No eligible fields found to scan."); return
     if not fields_to_include_in_report: click.echo("No fields found accessible by selected permission sets."); return
@@ -1529,7 +1538,11 @@ def audit_all_fields_by_selected_permission_sets(meta: Path, base_dir: Path):
                 full_field_api_name = f"{obj_name}.{field_name}"
                 csv_row = [obj_name, field_name, field_type]
                 for ps_name in permsets_for_report_columns:
-                    r_ps, e_ps = get_effective_field_permissions_from_ps_root(permset_xml_cache.get(ps_name), obj_name, full_field_api_name)
+                    cached_perms = field_permission_cache.get((ps_name, full_field_api_name))
+                    if cached_perms is None:
+                        cached_perms = get_effective_field_permissions_from_ps_root(permset_xml_cache.get(ps_name), obj_name, full_field_api_name)
+                        field_permission_cache[(ps_name, full_field_api_name)] = cached_perms
+                    r_ps, e_ps = cached_perms
                     csv_row.append(format_access_display(r_ps, e_ps))
                 writer.writerow(csv_row); processed_count_for_csv += 1
                 if processed_count_for_csv % 100 == 0: click.echo(f"  Written {processed_count_for_csv}/{len(fields_to_include_in_report)} fields to CSV...")
