@@ -105,8 +105,20 @@ def run_security_tool(script_dir: Path, org_url: str, config) -> None:
     ).ask()
 
     if not proceed:
-        click.echo("Returning to the main menu without launching the tool.")
-        return
+        workspace_choices = [
+            questionary.Choice(title=p.name, value=p) for p in existing_projects
+        ]
+        workspace_choices.append(questionary.Choice("Return to main menu", None))
+
+        selected_workspace = questionary.select(
+            "Select a workspace to use:", choices=workspace_choices
+        ).ask()
+
+        if selected_workspace is None:
+            click.echo("Returning to the main menu without launching the tool.")
+            return
+
+        project_path = selected_workspace
 
     print_post_setup_instructions(project_path, launching_tool=True)
 
