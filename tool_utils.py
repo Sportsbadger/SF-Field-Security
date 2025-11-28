@@ -450,7 +450,5 @@ def print_post_setup_instructions(project_path: Path, launching_tool: bool):
                 fg='green',
             )
         )
-        click.echo(f"1. Change into the project directory: cd \"{project_path}\"")
-        click.echo("2. Run the tool: python ../fs_tool_v151.py")
     click.echo("=" * 50)
 
