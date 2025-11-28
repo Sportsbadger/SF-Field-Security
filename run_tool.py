@@ -17,18 +17,70 @@ from tool_utils import (
     run_command,
 )
 
-if __name__ == '__main__':
-    click.echo(click.style("=== Salesforce Security Tool Launcher ===", bold=True, fg='cyan'))
 
-    script_dir = Path(__file__).parent
-    config = read_config(script_dir / 'config.ini')
-    org_url = config.target_org_url
-    persistent_alias = config.persistent_alias
+def ensure_authenticated(org_url: str, persistent_alias: str) -> bool:
+    """Authenticate to the org when no valid session exists."""
+
+    if check_auth(persistent_alias):
+        return True
+
+    click.echo(
+        click.style(
+            "\nAction Required: A browser window will open for authentication.",
+            bold=True,
+        )
+    )
+    login_result = run_command(
+        [
+            'sf',
+            'org',
+            'login',
+            'web',
+            '--instance-url',
+            org_url,
+            '--alias',
+            persistent_alias,
+        ]
+    )
+    return login_result.success
+
+
+def create_or_update_workspace(script_dir: Path, org_url: str, config) -> None:
+    """Download or refresh project metadata for a workspace."""
+
+    projects_dir = script_dir / 'projects'
+    project_path, _action, _refresh_metadata = choose_project_workspace(
+        projects_dir,
+        config.persistent_alias,
+        "Choose an action for your project workspace:",
+        "Create a new project workspace",
+        "Update an existing project workspace",
+        "Preparing to refresh metadata. This will delete the existing 'force-app' folder.",
+        "Removed old 'force-app' directory.",
+    )
+
+    if not ensure_authenticated(org_url, config.persistent_alias):
+        sys.exit(1)
+
+    metadata_plan = build_metadata_plan(project_path)
+    if not retrieve_and_convert_metadata(
+        metadata_plan,
+        config.api_version,
+        config.explicit_custom_objects,
+        config.persistent_alias,
+    ):
+        sys.exit(1)
+
+    print_post_setup_instructions(project_path, launching_tool=False)
+
+
+def run_security_tool(script_dir: Path, org_url: str, config) -> None:
+    """Launch the field security tool for a selected project."""
 
     projects_dir = script_dir / 'projects'
     project_path, _action, refresh_metadata = choose_project_workspace(
         projects_dir,
-        persistent_alias,
+        config.persistent_alias,
         "Choose an action:",
         "Create a new project workspace",
         "Update an existing project workspace",
@@ -37,34 +89,15 @@ if __name__ == '__main__':
     )
 
     if refresh_metadata:
-        if not check_auth(persistent_alias):
-            click.echo(
-                click.style(
-                    "\nAction Required: A browser window will open for authentication.",
-                    bold=True,
-                )
-            )
-            login_result = run_command(
-                [
-                    'sf',
-                    'org',
-                    'login',
-                    'web',
-                    '--instance-url',
-                    org_url,
-                    '--alias',
-                    persistent_alias,
-                ]
-            )
-            if not login_result.success:
-                sys.exit(1)
+        if not ensure_authenticated(org_url, config.persistent_alias):
+            sys.exit(1)
 
         metadata_plan = build_metadata_plan(project_path)
         if not retrieve_and_convert_metadata(
             metadata_plan,
             config.api_version,
             config.explicit_custom_objects,
-            persistent_alias,
+            config.persistent_alias,
         ):
             sys.exit(1)
     else:
@@ -80,30 +113,64 @@ if __name__ == '__main__':
                 fg='red',
             )
         )
-        sys.exit(1)
+        return
 
     subprocess.run([sys.executable, str(tool_script_path), '--project', str(project_path)], check=False)
 
     click.echo("\n" + "=" * 50)
     click.echo(click.style("Security tool session finished.", bold=True))
 
-    if questionary.confirm("Do you want to run the deployment script now?", default=False).ask():
-        deploy_script_path = script_dir / 'deploy_changes.py'
-        if not deploy_script_path.exists():
-            click.echo(
-                click.style(
-                    f"Error: The deployment script '{deploy_script_path.name}' was not found.",
-                    fg='red',
-                )
-            )
-        else:
-            click.echo(click.style("\nLaunching deployment script...", fg='cyan'))
-            subprocess.run([sys.executable, str(deploy_script_path)], check=False)
-    else:
-        click.echo("\nDeployment skipped.")
-        click.echo("To deploy your changes later, run:")
-        click.echo("python deploy_changes.py")
 
-    click.echo("\n" + "=" * 50)
-    click.echo("Tool run complete.")
-    click.echo("=" * 50)
+def deploy_changes(script_dir: Path) -> None:
+    """Launch deployment workflow when available."""
+
+    deploy_script_path = script_dir / 'deploy_changes.py'
+    if not deploy_script_path.exists():
+        click.echo(
+            click.style(
+                f"Error: The deployment script '{deploy_script_path.name}' was not found.",
+                fg='red',
+            )
+        )
+        return
+
+    click.echo(click.style("\nLaunching deployment script...", fg='cyan'))
+    subprocess.run([sys.executable, str(deploy_script_path)], check=False)
+
+
+if __name__ == '__main__':
+    click.echo(click.style("=== Salesforce Security Tool Launcher ===", bold=True, fg='cyan'))
+
+    script_dir = Path(__file__).parent
+    config = read_config(script_dir / 'config.ini')
+    org_url = config.target_org_url
+
+    while True:
+        selection = questionary.select(
+            "Choose an option:",
+            choices=[
+                "Create or Update Workspace",
+                "Run the File Security Tool",
+                "Deploy Changes",
+                "Exit",
+            ],
+        ).ask()
+
+        if selection is None or selection == "Exit":
+            click.echo("Goodbye!")
+            break
+
+        if selection == "Create or Update Workspace":
+            create_or_update_workspace(script_dir, org_url, config)
+            click.echo("\nReturning to the main menu...\n")
+            continue
+
+        if selection == "Run the File Security Tool":
+            run_security_tool(script_dir, org_url, config)
+            click.echo("\nReturning to the main menu...\n")
+            continue
+
+        if selection == "Deploy Changes":
+            deploy_changes(script_dir)
+            click.echo("\nReturning to the main menu...\n")
+
