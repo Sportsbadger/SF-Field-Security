@@ -397,8 +397,40 @@ def choose_project_workspace(
 
         return project_path, action, refresh_metadata
 
-    ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    project_path = projects_dir / f"{ts}_{persistent_alias}"
+    use_custom_name = questionary.confirm(
+        "Would you like to provide a custom workspace name?", default=False
+    ).ask()
+    project_dir_name: str
+    if use_custom_name:
+        while True:
+            custom_name = questionary.text(
+                "Enter a workspace name:", default=persistent_alias
+            ).ask()
+            if custom_name is None:
+                click.echo("Operation cancelled.")
+                sys.exit(0)
+
+            project_dir_name = custom_name.strip()
+            if not project_dir_name:
+                click.echo("Workspace name cannot be empty. Please enter a valid name.")
+                continue
+
+            candidate_path = projects_dir / project_dir_name
+            if candidate_path.exists():
+                click.echo(
+                    click.style(
+                        f"A workspace named '{project_dir_name}' already exists. Please choose a different name.",
+                        fg='yellow',
+                    )
+                )
+                continue
+
+            break
+    else:
+        ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        project_dir_name = f"{ts}_{persistent_alias}"
+
+    project_path = projects_dir / project_dir_name
     project_path.mkdir(parents=True, exist_ok=True)
     click.echo(f"\nCreated new project directory at: {project_path}")
     return project_path, action, True
@@ -411,7 +443,13 @@ def print_post_setup_instructions(project_path: Path, launching_tool: bool):
         click.echo(click.style("Setup complete. Launching the security tool...", bold=True, fg='green'))
         click.echo(f"Working on project: {project_path.name}")
     else:
-        click.echo(click.style("Setup Complete! Now, run the security tool.", bold=True, fg='green'))
+        click.echo(
+            click.style(
+                f"{project_path.name} has been created. Now run the Security Tool.",
+                bold=True,
+                fg='green',
+            )
+        )
         click.echo(f"1. Change into the project directory: cd \"{project_path}\"")
         click.echo("2. Run the tool: python ../fs_tool_v151.py")
     click.echo("=" * 50)
