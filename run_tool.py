@@ -78,30 +78,35 @@ def run_security_tool(script_dir: Path, org_url: str, config) -> None:
     """Launch the field security tool for a selected project."""
 
     projects_dir = script_dir / 'projects'
-    project_path, _action, refresh_metadata = choose_project_workspace(
-        projects_dir,
-        config.persistent_alias,
-        "Choose an action:",
-        "Create a new project workspace",
-        "Update an existing project workspace",
-        "Refreshing metadata... This will replace the 'force-app' folder.",
-        allow_use_without_refresh=True,
-    )
+    existing_projects: list[Path] = []
+    if projects_dir.is_dir():
+        existing_projects = sorted(
+            [p for p in projects_dir.iterdir() if p.is_dir()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
 
-    if refresh_metadata:
-        if not ensure_authenticated(org_url, config.persistent_alias):
-            sys.exit(1)
+    if not existing_projects:
+        click.echo(
+            click.style(
+                "No project workspaces found. Please create or update a workspace first.",
+                fg='yellow',
+            )
+        )
+        return
 
-        metadata_plan = build_metadata_plan(project_path)
-        if not retrieve_and_convert_metadata(
-            metadata_plan,
-            config.api_version,
-            config.explicit_custom_objects,
-            config.persistent_alias,
-        ):
-            sys.exit(1)
-    else:
-        click.echo(click.style("Skipping metadata refresh. Using existing project files.", fg='green'))
+    project_path = existing_projects[0]
+    click.echo(click.style("Using most recently updated workspace:", fg='cyan', bold=True))
+    click.echo(f"  {project_path}")
+
+    proceed = questionary.confirm(
+        "Proceed with this workspace? (Choose 'No' to return to the main menu)",
+        default=True,
+    ).ask()
+
+    if not proceed:
+        click.echo("Returning to the main menu without launching the tool.")
+        return
 
     print_post_setup_instructions(project_path, launching_tool=True)
 
