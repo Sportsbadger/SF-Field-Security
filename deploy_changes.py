@@ -63,16 +63,10 @@ if __name__ == '__main__':
         check=False,
     )
 
-    if not preview_json_result.success:
-        click.echo(
-            click.style(
-                "Deployment preview failed. Please resolve the issues above before deploying.",
-                fg='red',
-            )
-        )
-        sys.exit(preview_json_result.returncode or 1)
-
     planned_changes: list = []
+    preview_payload: dict = {}
+    result_payload: dict = {}
+
     try:
         preview_payload = json.loads(preview_json_result.stdout or '{}')
         result_payload = preview_payload.get('result', {}) if isinstance(preview_payload, dict) else {}
@@ -82,6 +76,17 @@ if __name__ == '__main__':
             or []
         )
     except json.JSONDecodeError:
+        if not preview_json_result.success:
+            click.echo(
+                click.style(
+                    "Deployment preview failed and returned non-JSON output.",
+                    fg='red',
+                )
+            )
+            if preview_json_result.stdout:
+                click.echo(preview_json_result.stdout)
+            sys.exit(preview_json_result.returncode or 1)
+
         click.echo(
             click.style(
                 "Could not parse deployment preview output. Review the preview details before proceeding.",
@@ -91,6 +96,18 @@ if __name__ == '__main__':
         if preview_json_result.stdout:
             click.echo(preview_json_result.stdout)
         sys.exit(1)
+
+    if not preview_json_result.success:
+        if preview_json_result.stdout:
+            click.echo(click.style("Deployment preview output:", bold=True))
+            click.echo(preview_json_result.stdout)
+        click.echo(
+            click.style(
+                "Deployment preview failed. Please resolve the issues above before deploying.",
+                fg='red',
+            )
+        )
+        sys.exit(preview_json_result.returncode or 1)
 
     if not planned_changes:
         click.echo(
