@@ -77,19 +77,19 @@ def find_metadata_base(root: Path, override: str = None) -> Path:
     if override:
         base = Path(override)
         if (base / 'objects').is_dir() and ((base / 'profiles').is_dir() or (base / 'permissionsets').is_dir()):
-            click.echo(f"Using override metadata path: {base}")
+            click.echo("")
             return base.resolve()
         click.echo(click.style(f"Error: Invalid override path: {base}. 'objects' and ('profiles' or 'permissionsets') missing.", fg='red'))
         sys.exit(1)
     default_paths = [root / 'force-app' / 'main' / 'default', root / 'mdapioutput', root / 'src']
     for default in default_paths:
         if (default / 'objects').is_dir() and ((default / 'profiles').is_dir() or (default / 'permissionsets').is_dir()):
-            click.echo(f"Auto-detected metadata path: {default}")
+            click.echo("")
             return default.resolve()
     for obj_dir in root.rglob('objects'):
         base = obj_dir.parent
         if (base / 'profiles').is_dir() or (base / 'permissionsets').is_dir():
-            click.echo(f"Found metadata via fallback: {base}")
+            click.echo("")
             return base.resolve()
     click.echo(click.style('Error: Metadata folder not found.', fg='red'))
     click.echo("Ensure project has 'objects' and ('profiles' or 'permissionsets') dir, or use --metadata.")
@@ -1718,7 +1718,7 @@ def main(project, metadata, dry_run):
     """Salesforce Field Security & Object Permission Manager."""
     try:
         project_root = Path(project).resolve(strict=True)
-        click.echo(f"Project Root: {project_root}")
+        click.echo("")
     except FileNotFoundError:
         click.echo(click.style(f"Error: Project directory not found: {Path(project).resolve()}", fg='red')); sys.exit(1)
     except Exception as e:
@@ -1730,14 +1730,14 @@ def main(project, metadata, dry_run):
     try:
         meta_override_path = project_root / metadata if metadata else None
         meta_base = find_metadata_base(project_root, str(meta_override_path) if meta_override_path else None)
-        click.echo(f"Using Metadata Base: {meta_base}")
+        click.echo("")
     except SystemExit: sys.exit(1)
     except Exception as e: click.echo(click.style(f"Critical Error finding metadata base: {e}", fg='red')); sys.exit(1)
 
     fs_tool_dir = project_root / 'FS Tool Files'
     try:
         fs_tool_dir.mkdir(parents=True, exist_ok=True)
-        click.echo(f"FS Tool Directory (for reports/backups): {fs_tool_dir}")
+        click.echo("")
     except OSError as e: click.echo(click.style(f"Error creating tool directory '{fs_tool_dir}': {e}.", fg='red'))
 
     while True:
@@ -1747,8 +1747,8 @@ def main(project, metadata, dry_run):
                 'Generate Field Security Report (FLS)',
                 'Generate Object Permissions Report',
                 'Who has access to this field? (Reverse Lookup)',
-                'Audit Permission Sets (List Report - FLS, Obj, UserPerms)',
-                'Audit Permission Sets (Matrix Report - FLS focused)',
+                'Audit Permission Sets (By Perm Set)',
+                'Audit Permission Sets (By Field)',
                 'Bulk Apply Field Security (FLS)',
                 'Modify Object Permissions',
                 'Rollback From Backup',
@@ -1763,9 +1763,9 @@ def main(project, metadata, dry_run):
             generate_object_permissions_report(meta_base, fs_tool_dir)
         elif main_choice == 'Who has access to this field? (Reverse Lookup)':
             reverse_lookup_field_access(meta_base, fs_tool_dir)
-        elif main_choice == 'Audit Permission Sets (List Report - FLS, Obj, UserPerms)':
+        elif main_choice == 'Audit Permission Sets (By Perm Set)':
             inspect_permission_set_access(meta_base, fs_tool_dir)
-        elif main_choice == 'Audit Permission Sets (Matrix Report - FLS focused)':
+        elif main_choice == 'Audit Permission Sets (By Field)':
             audit_all_fields_by_selected_permission_sets(meta_base, fs_tool_dir)
         elif main_choice == 'Bulk Apply Field Security (FLS)':
             bulk_apply_fls(meta_base, fs_tool_dir, dry_run)
