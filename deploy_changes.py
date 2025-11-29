@@ -2,8 +2,10 @@
 
 from pathlib import Path
 import sys
+import json
 
 import click
+import questionary
 
 from tool_utils import check_auth, read_config, run_command
 
@@ -46,6 +48,93 @@ if __name__ == '__main__':
             "No changes to deploy."
         )
         sys.exit(1)
+
+    click.echo(click.style("\nChecking for deployable changes...", bold=True))
+
+    preview_json_result = run_command(
+        [
+            'sf', 'project', 'deploy', 'preview',
+            '--manifest', str(manifest_path),
+            '--target-org', persistent_alias,
+            '--json',
+        ],
+        cwd=latest_project,
+        capture_output=True,
+        check=False,
+    )
+
+    planned_changes: list = []
+    preview_payload: dict = {}
+    result_payload: dict = {}
+
+    try:
+        preview_payload = json.loads(preview_json_result.stdout or '{}')
+        result_payload = preview_payload.get('result', {}) if isinstance(preview_payload, dict) else {}
+        planned_changes = (
+            result_payload.get('deployedSource')
+            or result_payload.get('outboundFiles')
+            or []
+        )
+    except json.JSONDecodeError:
+        if not preview_json_result.success:
+            click.echo(
+                click.style(
+                    "Deployment preview failed and returned non-JSON output.",
+                    fg='red',
+                )
+            )
+            if preview_json_result.stdout:
+                click.echo(preview_json_result.stdout)
+            sys.exit(preview_json_result.returncode or 1)
+
+        click.echo(
+            click.style(
+                "Could not parse deployment preview output. Review the preview details before proceeding.",
+                fg='red',
+            )
+        )
+        if preview_json_result.stdout:
+            click.echo(preview_json_result.stdout)
+        sys.exit(1)
+
+    if not preview_json_result.success:
+        if preview_json_result.stdout:
+            click.echo(click.style("Deployment preview output:", bold=True))
+            click.echo(preview_json_result.stdout)
+        click.echo(
+            click.style(
+                "Deployment preview failed. Please resolve the issues above before deploying.",
+                fg='red',
+            )
+        )
+        sys.exit(preview_json_result.returncode or 1)
+
+    if not planned_changes:
+        click.echo(
+            click.style(
+                "No deployable changes were detected for the latest project. Returning to the menu.",
+                fg='yellow',
+            )
+        )
+        sys.exit(0)
+
+    click.echo(click.style("\nPlanned deployment (before/after):", bold=True))
+    run_command(
+        [
+            'sf', 'project', 'deploy', 'preview',
+            '--manifest', str(manifest_path),
+            '--target-org', persistent_alias,
+        ],
+        cwd=latest_project,
+        check=False,
+    )
+
+    if not questionary.confirm(
+        f"Deploy these changes to org alias '{persistent_alias}'?",
+        default=False,
+    ).ask():
+        click.echo("Deployment cancelled. Returning to the menu without changes.")
+        sys.exit(0)
 
     click.echo(click.style("\nStarting deployment...", bold=True))
 
