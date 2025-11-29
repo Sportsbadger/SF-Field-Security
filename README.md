@@ -39,12 +39,12 @@ Use the launcher to authenticate, retrieve metadata, and open the interactive se
 
 Within the menu you can run:
 - **Generate Field Security Report (FLS):** Report field-level access for selected profiles or permission sets.
+- **Modify Field Security (FLS):** Apply read/edit updates manually or from a CSV definition to profiles or permission sets, with backups.
 - **Generate Object Permissions Report:** Matrix view of CRUD/View All/Modify All permissions across chosen objects and profiles/permission sets.
+- **Modify Object Permissions:** Update CRUD/View All/Modify All settings manually or via CSV input.
 - **Who has access to this field? (Reverse Lookup):** Identify which permission sets or profiles grant access to a specific field.
 - **Audit Permission Sets (List Report - FLS, Obj, UserPerms):** Inspect object, field, and user permissions for selected permission sets.
 - **Audit Permission Sets (Matrix Report - FLS focused):** Produce a field-centric matrix of permission-set access.
-- **Bulk Apply Field Security (FLS):** Apply read/edit updates manually or from a CSV definition to profiles or permission sets, with backups.
-- **Modify Object Permissions:** Update CRUD/View All/Modify All settings manually or via CSV input.
 - **Rollback From Backup:** Restore profile/permission-set files from backups created by previous runs.
 
 Use `--dry-run` to preview planned bulk changes without writing to disk. Reports and backups are stored in the `FS Tool Files` directory inside the project workspace.

@@ -784,7 +784,7 @@ def _apply_bulk_fls_modifications_to_files( meta: Path, base_dir: Path, planned_
     else: click.echo(f"Bulk FLS update process finished, but no Profiles or Permission Sets were actually modified.")
 
 def bulk_apply_fls(meta: Path, base_dir: Path, dry_run: bool):
-    click.echo("\n--- Bulk Apply Field Security (FLS) ---")
+    click.echo("\n--- Modify Field Security (FLS) ---")
     all_selected_full_field_names, field_new_perms, source_details = _handle_field_security_source_selection(meta)
     if not all_selected_full_field_names and not field_new_perms:
         if not source_details: click.echo("FLS application cancelled.")
@@ -1745,12 +1745,12 @@ def main(project, metadata, dry_run):
             'Choose action:',
             choices=[
                 'Generate Field Security Report (FLS)',
+                'Modify Field Security',
                 'Generate Object Permissions Report',
+                'Modify Object Permissions',
                 'Who has access to this field? (Reverse Lookup)',
                 'Audit Permission Sets (By Perm Set)',
                 'Audit Permission Sets (By Field)',
-                'Bulk Apply Field Security (FLS)',
-                'Modify Object Permissions',
                 'Rollback From Backup',
                 'Exit'
             ], qmark='>', pointer='->'
@@ -1759,18 +1759,18 @@ def main(project, metadata, dry_run):
 
         if main_choice == 'Generate Field Security Report (FLS)':
             generate_field_security_report(meta_base, fs_tool_dir)
+        elif main_choice == 'Modify Field Security':
+            bulk_apply_fls(meta_base, fs_tool_dir, dry_run)
         elif main_choice == 'Generate Object Permissions Report':
             generate_object_permissions_report(meta_base, fs_tool_dir)
+        elif main_choice == 'Modify Object Permissions':
+            modify_object_permissions(meta_base, fs_tool_dir, dry_run)
         elif main_choice == 'Who has access to this field? (Reverse Lookup)':
             reverse_lookup_field_access(meta_base, fs_tool_dir)
         elif main_choice == 'Audit Permission Sets (By Perm Set)':
             inspect_permission_set_access(meta_base, fs_tool_dir)
         elif main_choice == 'Audit Permission Sets (By Field)':
             audit_all_fields_by_selected_permission_sets(meta_base, fs_tool_dir)
-        elif main_choice == 'Bulk Apply Field Security (FLS)':
-            bulk_apply_fls(meta_base, fs_tool_dir, dry_run)
-        elif main_choice == 'Modify Object Permissions':
-            modify_object_permissions(meta_base, fs_tool_dir, dry_run)
         elif main_choice == 'Rollback From Backup':
             if dry_run: click.echo(click.style("DRY RUN: Rollback operation skipped.", fg='yellow'))
             else: rollback_changes(meta_base, fs_tool_dir)
