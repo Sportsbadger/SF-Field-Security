@@ -35,6 +35,17 @@ class ConfigSettings:
     persistent_alias: str
     explicit_custom_objects: list[str]
     api_version: str
+    active_org_name: str
+    available_orgs: list['OrgConfig']
+
+
+@dataclass
+class OrgConfig:
+    """Configuration describing a single Salesforce org target."""
+
+    name: str
+    target_org_url: str
+    persistent_alias: str
 
 
 @dataclass
@@ -148,31 +159,77 @@ def run_command(
 def read_config(config_path: Path) -> ConfigSettings:
     """Read INI configuration values used throughout the tool suite."""
 
-    config = configparser.ConfigParser()
-    config.read(config_path)
-    explicit_objects_str = config.get(
+    parser = configparser.ConfigParser()
+    parser.read(config_path)
+
+    explicit_objects_str = parser.get(
         'ToolOptions', 'explicit_custom_objects', fallback=''
     ).strip()
-    settings = ConfigSettings(
-        target_org_url=config.get('Salesforce', 'target_org_url', fallback='').strip(),
-        persistent_alias=config.get('Salesforce', 'persistent_alias', fallback='').strip(),
-        explicit_custom_objects=[
-            obj.strip() for obj in explicit_objects_str.split(',') if obj.strip()
-        ],
-        api_version=config.get('ToolOptions', 'api_version', fallback='60.0').strip(),
-    )
+    explicit_custom_objects = [
+        obj.strip() for obj in explicit_objects_str.split(',') if obj.strip()
+    ]
+
+    org_sections = [name for name in parser.sections() if name.startswith('Org ')]
+    available_orgs: list[OrgConfig] = []
+    for section in org_sections:
+        org_name = section[4:].strip() or 'default'
+        available_orgs.append(
+            OrgConfig(
+                name=org_name,
+                target_org_url=parser.get(section, 'target_org_url', fallback='').strip(),
+                persistent_alias=parser.get(section, 'persistent_alias', fallback='').strip(),
+            )
+        )
+
+    # Backwards compatibility with the legacy single-org format.
+    if not available_orgs and parser.has_section('Salesforce'):
+        available_orgs.append(
+            OrgConfig(
+                name='default',
+                target_org_url=parser.get('Salesforce', 'target_org_url', fallback='').strip(),
+                persistent_alias=parser.get('Salesforce', 'persistent_alias', fallback='').strip(),
+            )
+        )
+
+    active_org_name = parser.get('SalesforceOrgs', 'active_org', fallback='').strip()
+    active_org: OrgConfig | None = None
+    if active_org_name:
+        active_org = next((org for org in available_orgs if org.name == active_org_name), None)
+        if active_org is None:
+            available_names = ', '.join(org.name for org in available_orgs) or 'none found'
+            raise click.ClickException(
+                f"Active org '{active_org_name}' was not found. Available orgs: {available_names}."
+            )
+    elif len(available_orgs) == 1:
+        active_org = available_orgs[0]
+    elif len(available_orgs) > 1:
+        raise click.ClickException(
+            "Multiple org configurations detected. Set 'SalesforceOrgs.active_org' and comment out the inactive entries so only one is active."
+        )
+
+    if active_org is None:
+        raise click.ClickException(
+            "No Salesforce org configuration found. Run the configuration setup to create config.ini."
+        )
 
     missing_fields: list[str] = []
-    if not settings.target_org_url:
-        missing_fields.append('Salesforce.target_org_url')
-    if not settings.persistent_alias:
-        missing_fields.append('Salesforce.persistent_alias')
+    if not active_org.target_org_url:
+        missing_fields.append(f"Org {active_org.name}.target_org_url")
+    if not active_org.persistent_alias:
+        missing_fields.append(f"Org {active_org.name}.persistent_alias")
     if missing_fields:
         raise click.ClickException(
             "Missing required configuration values: " + ', '.join(missing_fields)
         )
 
-    return settings
+    return ConfigSettings(
+        target_org_url=active_org.target_org_url,
+        persistent_alias=active_org.persistent_alias,
+        explicit_custom_objects=explicit_custom_objects,
+        api_version=parser.get('ToolOptions', 'api_version', fallback='60.0').strip(),
+        active_org_name=active_org.name,
+        available_orgs=available_orgs,
+    )
 
 
 def check_auth(alias: str, announce: bool = True) -> bool:
@@ -217,6 +274,177 @@ def check_auth(alias: str, announce: bool = True) -> bool:
     if announce:
         click.echo(click.style("No active session found. A new login will be required.", fg='yellow'))
     return False
+
+
+def _prompt_for_org(
+    label_default: str, url_default: str, alias_default: str | None = None
+) -> OrgConfig:
+    """Collect org configuration details interactively."""
+
+    while True:
+        org_label = questionary.text(
+            "Enter a label for this org (e.g., sandbox, prod):", default=label_default
+        ).ask()
+        if org_label is None:
+            raise click.ClickException("Configuration cancelled.")
+        org_label = org_label.strip()
+        if org_label:
+            break
+        click.echo("Org label cannot be empty. Please provide a name.")
+
+    while True:
+        org_url = questionary.text(
+            f"Login URL for '{org_label}':", default=url_default
+        ).ask()
+        if org_url is None:
+            raise click.ClickException("Configuration cancelled.")
+        org_url = org_url.strip()
+        if org_url:
+            break
+        click.echo("Login URL cannot be empty. Please provide a value.")
+
+    while True:
+        alias = questionary.text(
+            f"Persistent alias for '{org_label}':", default=alias_default or org_label
+        ).ask()
+        if alias is None:
+            raise click.ClickException("Configuration cancelled.")
+        alias = alias.strip()
+        if alias:
+            break
+        click.echo("Alias cannot be empty. Please provide a value.")
+
+    return OrgConfig(name=org_label, target_org_url=org_url, persistent_alias=alias)
+
+
+def create_config_interactively(
+    config_path: Path,
+    existing_orgs: list[OrgConfig] | None = None,
+    active_org_name: str | None = None,
+    explicit_custom_objects: str = '',
+    api_version: str = '60.0',
+) -> None:
+    """Guide the user through creating a config.ini file."""
+
+    click.echo(
+        click.style(
+            "\nStarting configuration setup for config.ini.",
+            fg='cyan',
+            bold=True,
+        )
+    )
+
+    orgs: list[OrgConfig] = []
+    url_default = 'https://login.salesforce.com'
+    if existing_orgs:
+        click.echo("Existing org entries found. Update the values or press Enter to keep them.")
+        for org in existing_orgs:
+            orgs.append(
+                _prompt_for_org(
+                    org.name,
+                    org.target_org_url or url_default,
+                    alias_default=org.persistent_alias or org.name,
+                )
+            )
+    else:
+        orgs.append(_prompt_for_org('sandbox', url_default))
+
+    while questionary.confirm(
+        "Would you like to add another org configuration?", default=False
+    ).ask():
+        orgs.append(_prompt_for_org(f"org{len(orgs) + 1}", url_default))
+
+    if len(orgs) == 1:
+        active_org_name = orgs[0].name
+    else:
+        active_org_name = questionary.select(
+            "Which org should be active? (Inactive orgs will be saved for later use)",
+            choices=[org.name for org in orgs],
+            default=active_org_name or orgs[0].name,
+        ).ask()
+        if active_org_name is None:
+            raise click.ClickException("Configuration cancelled.")
+
+    explicit_custom_objects = (
+        questionary.text(
+            "Comma-separated list of explicit custom objects (optional):",
+            default=explicit_custom_objects,
+        ).ask()
+        or ''
+    ).strip()
+
+    api_version = (
+        questionary.text("API version to use:", default=api_version or '60.0').ask()
+        or '60.0'
+    ).strip()
+
+    config_lines: list[str] = [
+        "# Salesforce Field Security configuration.",
+        "# Define multiple [Org <name>] sections. Comment out the ones you do not want to use and set 'SalesforceOrgs.active_org' to the active entry.",
+        "",
+        "[SalesforceOrgs]",
+        f"active_org = {active_org_name}",
+        "",
+    ]
+
+    for org in orgs:
+        config_lines.append(f"[Org {org.name}]")
+        config_lines.append(f"target_org_url = {org.target_org_url}")
+        config_lines.append(f"persistent_alias = {org.persistent_alias}")
+        config_lines.append("")
+
+    config_lines.extend(
+        [
+            "[ToolOptions]",
+            f"explicit_custom_objects = {explicit_custom_objects}",
+            f"api_version = {api_version}",
+            "",
+        ]
+    )
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text('\n'.join(config_lines), encoding='utf-8')
+
+    click.echo(click.style(f"Configuration saved to {config_path}.", fg='green'))
+    click.echo(
+        "Comment out unused org blocks if you only want one available, and update 'active_org' to switch between them."
+    )
+
+
+def ensure_config(config_path: Path, projects_dir: Path) -> None:
+    """Create config.ini interactively on first run when needed."""
+
+    config_exists = config_path.exists()
+    existing_settings: ConfigSettings | None = None
+    if config_exists:
+        try:
+            existing_settings = read_config(config_path)
+        except click.ClickException:
+            existing_settings = None
+
+    workspace_exists = projects_dir.is_dir() and any(projects_dir.iterdir())
+
+    if config_exists and workspace_exists:
+        return
+
+    reason: str
+    if not config_exists and not workspace_exists:
+        reason = "No configuration or project workspace detected."
+    elif not config_exists:
+        reason = "Configuration file not found."
+    else:
+        reason = "No project workspace found."
+
+    click.echo(click.style(f"{reason} Starting first-run setup...", fg='yellow'))
+    create_config_interactively(
+        config_path,
+        existing_orgs=existing_settings.available_orgs if existing_settings else None,
+        active_org_name=existing_settings.active_org_name if existing_settings else None,
+        explicit_custom_objects=','.join(existing_settings.explicit_custom_objects)
+        if existing_settings
+        else '',
+        api_version=existing_settings.api_version if existing_settings else '60.0',
+    )
 
 
 def generate_download_manifest(manifest_path: Path, api_version: str, explicit_objects: list[str]):

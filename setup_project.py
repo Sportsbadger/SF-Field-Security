@@ -9,6 +9,7 @@ from tool_utils import (
     build_metadata_plan,
     check_auth,
     choose_project_workspace,
+    ensure_config,
     print_post_setup_instructions,
     read_config,
     retrieve_and_convert_metadata,
@@ -19,7 +20,10 @@ if __name__ == '__main__':
     click.echo(click.style("=== Step 1: Project Setup and Metadata Download ===", bold=True, fg='cyan'))
 
     script_dir = Path(__file__).parent
-    config = read_config(script_dir / 'config.ini')
+    config_path = script_dir / 'config.ini'
+    projects_dir = script_dir / 'projects'
+    ensure_config(config_path, projects_dir)
+    config = read_config(config_path)
     org_url = config.target_org_url
     persistent_alias = config.persistent_alias
 
