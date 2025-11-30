@@ -14,10 +14,14 @@ from tool_utils import (
     choose_project_workspace,
     ConfigSettings,
     ensure_config,
+    list_workspaces_for_alias,
+    NavigationInterrupt,
     print_post_setup_instructions,
+    prompt_with_navigation,
     read_config,
     retrieve_and_convert_metadata,
     run_command,
+    save_workspace_info,
 )
 
 
@@ -60,15 +64,13 @@ def switch_active_org(config_path: Path, config) -> ConfigSettings:
         for org in config.available_orgs
     ]
 
-    selection = questionary.select(
-        "Select the org you want to activate:",
-        choices=org_choices,
-        default=config.active_org_name,
-    ).ask()
-
-    if selection is None:
-        click.echo("Active org unchanged.")
-        return config
+    selection = prompt_with_navigation(
+        questionary.select(
+            "Select the org you want to activate:",
+            choices=org_choices,
+            default=config.active_org_name,
+        )
+    )
     if selection == config.active_org_name:
         click.echo(f"'{selection}' is already the active org.")
         return config
@@ -86,51 +88,54 @@ def switch_active_org(config_path: Path, config) -> ConfigSettings:
     return read_config(config_path)
 
 
-def create_or_update_workspace(script_dir: Path, org_url: str, config) -> None:
-    """Download or refresh project metadata for a workspace."""
+def select_or_create_workspace(script_dir: Path, org_url: str, config) -> None:
+    """Select an existing workspace for the org or create a new one."""
 
     projects_dir = script_dir / 'projects'
-    project_path, _action, _refresh_metadata = choose_project_workspace(
+
+    project_path, refresh_metadata = choose_project_workspace(
         projects_dir,
         config.persistent_alias,
-        "Choose an action for your project workspace:",
+        f"Select a workspace for org '{config.active_org_name}' ({config.persistent_alias}):",
         "Create a new project workspace",
-        "Update an existing project workspace",
+        "Use an existing project workspace",
         "Preparing to refresh metadata. This will delete the existing 'force-app' folder.",
         "Removed old 'force-app' directory.",
+        allow_use_without_refresh=True,
     )
 
-    if not ensure_authenticated(org_url, config.persistent_alias):
-        sys.exit(1)
+    if refresh_metadata:
+        if not ensure_authenticated(org_url, config.persistent_alias):
+            sys.exit(1)
 
-    metadata_plan = build_metadata_plan(project_path)
-    if not retrieve_and_convert_metadata(
-        metadata_plan,
-        config.api_version,
-        config.explicit_custom_objects,
-        config.persistent_alias,
-    ):
-        sys.exit(1)
+        metadata_plan = build_metadata_plan(project_path)
+        if not retrieve_and_convert_metadata(
+            metadata_plan,
+            config.api_version,
+            config.explicit_custom_objects,
+            config.persistent_alias,
+        ):
+            sys.exit(1)
 
-    print_post_setup_instructions(project_path, launching_tool=False)
+        save_workspace_info(project_path, config.active_org_name, config.persistent_alias)
+        print_post_setup_instructions(project_path, launching_tool=False)
+        return
+
+    save_workspace_info(project_path, config.active_org_name, config.persistent_alias)
+    click.echo("\nWorkspace ready without refreshing metadata.")
+    click.echo(f"Using existing project: {project_path}")
 
 
 def run_security_tool(script_dir: Path, org_url: str, config) -> None:
     """Launch the field security tool for a selected project."""
 
     projects_dir = script_dir / 'projects'
-    existing_projects: list[Path] = []
-    if projects_dir.is_dir():
-        existing_projects = sorted(
-            [p for p in projects_dir.iterdir() if p.is_dir()],
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
+    existing_projects = list_workspaces_for_alias(projects_dir, config.persistent_alias)
 
     if not existing_projects:
         click.echo(
             click.style(
-                "No project workspaces found. Please create or update a workspace first.",
+                "No project workspaces found. Please select or create a workspace first.",
                 fg='yellow',
             )
         )
@@ -140,10 +145,12 @@ def run_security_tool(script_dir: Path, org_url: str, config) -> None:
     click.echo(click.style("Using most recently updated workspace:", fg='cyan', bold=True))
     click.echo(f"  {project_path}")
 
-    proceed = questionary.confirm(
-        "Proceed with this workspace? (Choose 'No' to return to the main menu)",
-        default=True,
-    ).ask()
+    proceed = prompt_with_navigation(
+        questionary.confirm(
+            "Proceed with this workspace? (Choose 'No' to return to the main menu)",
+            default=True,
+        )
+    )
 
     if not proceed:
         workspace_choices = [
@@ -151,16 +158,11 @@ def run_security_tool(script_dir: Path, org_url: str, config) -> None:
         ]
         workspace_choices.append(questionary.Choice("Return to main menu", None))
 
-        selected_workspace = questionary.select(
-            "Select a workspace to use:", choices=workspace_choices
-        ).ask()
+        project_path = prompt_with_navigation(
+            questionary.select("Select a workspace to use:", choices=workspace_choices)
+        )
 
-        if selected_workspace is None:
-            click.echo("Returning to the main menu without launching the tool.")
-            return
-
-        project_path = selected_workspace
-
+    save_workspace_info(project_path, config.active_org_name, config.persistent_alias)
     print_post_setup_instructions(project_path, launching_tool=True)
 
     tool_script_path = script_dir / 'fs_tool_v151.py'
@@ -205,32 +207,57 @@ if __name__ == '__main__':
     ensure_config(config_path, projects_dir)
     config = read_config(config_path)
 
+    active_org_display = f"{config.active_org_name} ({config.persistent_alias})"
+    click.echo(click.style(f"Active org: {active_org_display}", fg='cyan'))
+    org_workspaces = list_workspaces_for_alias(projects_dir, config.persistent_alias)
+    if org_workspaces:
+        click.echo(
+            click.style(
+                f"Most recent workspace for this org: {org_workspaces[0].name}",
+                fg='cyan',
+            )
+        )
+    else:
+        click.echo(click.style("No workspaces found for this org yet.", fg='yellow'))
+
     while True:
-        menu_choices = [
-            "Create or Update Workspace",
-            "Run the File Security Tool",
-            "Deploy Changes",
-        ]
+        menu_choices = ["Select or Create Workspace"]
         if len(config.available_orgs) > 1:
             menu_choices.append("Switch Active Org")
-        menu_choices.append("Exit")
+        menu_choices.extend(
+            ["Run the File Security Tool", "Deploy Changes", "Exit"]
+        )
 
-        selection = questionary.select(
-            "Choose an option:",
-            choices=menu_choices,
-        ).ask()
-
-        if selection is None or selection == "Exit":
+        try:
+            selection = prompt_with_navigation(
+                questionary.select(
+                    "Choose an option:",
+                    choices=menu_choices,
+                )
+            )
+        except NavigationInterrupt:
             click.echo("Goodbye!")
             break
 
-        if selection == "Create or Update Workspace":
-            create_or_update_workspace(script_dir, config.target_org_url, config)
+        if selection == "Exit":
+            click.echo("Goodbye!")
+            break
+
+        if selection == "Select or Create Workspace":
+            try:
+                select_or_create_workspace(script_dir, config.target_org_url, config)
+            except NavigationInterrupt:
+                click.echo("\nReturning to the main menu...\n")
+                continue
             click.echo("\nReturning to the main menu...\n")
             continue
 
         if selection == "Run the File Security Tool":
-            run_security_tool(script_dir, config.target_org_url, config)
+            try:
+                run_security_tool(script_dir, config.target_org_url, config)
+            except NavigationInterrupt:
+                click.echo("\nReturning to the main menu...\n")
+                continue
             click.echo("\nReturning to the main menu...\n")
             continue
 
@@ -240,6 +267,10 @@ if __name__ == '__main__':
             continue
 
         if selection == "Switch Active Org":
-            config = switch_active_org(config_path, config)
+            try:
+                config = switch_active_org(config_path, config)
+            except NavigationInterrupt:
+                click.echo("\nReturning to the main menu...\n")
+                continue
             click.echo("\nReturning to the main menu...\n")
 
