@@ -698,11 +698,11 @@ def choose_project_workspace(
 
         project_path = projects_dir / project_dir_name
         project_path.mkdir(parents=True, exist_ok=True)
-        click.echo(f"\nCreated new project directory at: {project_path}")
+        click.echo(f"\nCreated new project directory: {project_path.name}")
         return project_path, True
 
     project_path: Path = selection
-    click.echo(f"\nSelected existing project: {project_path}")
+    click.echo(f"\nSelected existing project: {project_path.name}")
     refresh_metadata = True
     if allow_use_without_refresh:
         proceed_choice = prompt_with_navigation(
