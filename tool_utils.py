@@ -15,6 +15,25 @@ import click
 import questionary
 
 SF_NAMESPACE_URI = 'http://soap.sforce.com/2006/04/metadata'
+WORKSPACE_INFO_FILENAME = '.workspace_info.json'
+
+
+class NavigationInterrupt(Exception):
+    """Raised when the user requests to navigate back using Ctrl+C."""
+
+
+def prompt_with_navigation(prompt):
+    """Execute a questionary prompt and translate cancellations into navigation."""
+
+    try:
+        answer = prompt.ask()
+    except KeyboardInterrupt:
+        raise NavigationInterrupt() from None
+
+    if answer is None:
+        raise NavigationInterrupt()
+
+    return answer
 
 
 @dataclass
@@ -274,6 +293,58 @@ def check_auth(alias: str, announce: bool = True) -> bool:
     if announce:
         click.echo(click.style("No active session found. A new login will be required.", fg='yellow'))
     return False
+
+
+def read_workspace_info(project_path: Path) -> dict | None:
+    """Return recorded workspace metadata when available."""
+
+    info_path = project_path / WORKSPACE_INFO_FILENAME
+    if not info_path.is_file():
+        return None
+
+    try:
+        with info_path.open('r', encoding='utf-8') as info_file:
+            return json.load(info_file)
+    except (json.JSONDecodeError, OSError):  # pragma: no cover - best effort
+        return None
+
+
+def save_workspace_info(project_path: Path, org_name: str, persistent_alias: str) -> None:
+    """Persist workspace metadata for later filtering and display."""
+
+    info_path = project_path / WORKSPACE_INFO_FILENAME
+    info = {
+        'org_name': org_name,
+        'persistent_alias': persistent_alias,
+        'last_updated': datetime.datetime.now().isoformat(),
+    }
+    with info_path.open('w', encoding='utf-8') as info_file:
+        json.dump(info, info_file, indent=2)
+
+
+def _workspace_matches_alias(project_path: Path, persistent_alias: str) -> bool:
+    """Determine whether a workspace belongs to the current org alias."""
+
+    info = read_workspace_info(project_path)
+    if info and info.get('persistent_alias') == persistent_alias:
+        return True
+
+    return persistent_alias in project_path.name
+
+
+def list_workspaces_for_alias(projects_dir: Path, persistent_alias: str) -> list[Path]:
+    """Return existing workspaces that belong to the specified org alias."""
+
+    if not projects_dir.is_dir():
+        return []
+
+    matches = [
+        path
+        for path in projects_dir.iterdir()
+        if path.is_dir() and _workspace_matches_alias(path, persistent_alias)
+    ]
+
+    return sorted(matches, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 def _prompt_for_org(
@@ -575,103 +646,87 @@ def choose_project_workspace(
     update_warning: str,
     post_delete_message: str | None = None,
     allow_use_without_refresh: bool = False,
-) -> tuple[Path, str, bool]:
+) -> tuple[Path, bool]:
     """Select or create the project workspace directory to operate against."""
-    existing_projects: list[Path] = []
-    if projects_dir.is_dir():
-        existing_projects = sorted(
-            [p for p in projects_dir.iterdir() if p.is_dir()],
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
+
+    existing_projects = list_workspaces_for_alias(projects_dir, persistent_alias)
+
+    workspace_choices: list[questionary.Choice] = [
+        questionary.Choice(title=p.name, value=p) for p in existing_projects
+    ]
+    workspace_choices.append(questionary.Choice(create_choice_label, 'create_new'))
+    workspace_choices.append(questionary.Choice("Return to previous menu", None))
+
+    selection = prompt_with_navigation(
+        questionary.select(action_prompt, choices=workspace_choices)
+    )
+
+    if selection == 'create_new':
+        use_custom_name = prompt_with_navigation(
+            questionary.confirm(
+                "Would you like to provide a custom workspace name?", default=False
+            )
         )
+        project_dir_name: str
+        if use_custom_name:
+            while True:
+                custom_name = prompt_with_navigation(
+                    questionary.text("Enter a workspace name:", default=persistent_alias)
+                )
 
-    menu_choices = [create_choice_label]
-    if existing_projects:
-        menu_choices.append(update_choice_label)
+                project_dir_name = custom_name.strip()
+                if not project_dir_name:
+                    click.echo(
+                        "Workspace name cannot be empty. Please enter a valid name."
+                    )
+                    continue
 
-    action = questionary.select(action_prompt, choices=menu_choices).ask()
-    if action is None:
-        click.echo("Operation cancelled.")
-        sys.exit(0)
+                candidate_path = projects_dir / project_dir_name
+                if candidate_path.exists():
+                    click.echo(
+                        click.style(
+                            f"A workspace named '{project_dir_name}' already exists. Please choose a different name.",
+                            fg='yellow',
+                        )
+                    )
+                    continue
 
-    if action == update_choice_label:
-        project_choices = [p.name for p in existing_projects]
-        chosen_project_name = questionary.select(
-            "Which project to update?"
-            if action_prompt.endswith('workspace')
-            else "Which project workspace would you like to update?",
-            choices=project_choices,
-        ).ask()
-        if chosen_project_name is None:
-            click.echo("Operation cancelled.")
-            sys.exit(0)
+                break
+        else:
+            ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            project_dir_name = f"{ts}_{persistent_alias}"
 
-        project_path = projects_dir / chosen_project_name
-        click.echo(f"\nSelected existing project: {project_path}")
-        refresh_metadata = True
-        if allow_use_without_refresh:
-            proceed_choice = questionary.select(
+        project_path = projects_dir / project_dir_name
+        project_path.mkdir(parents=True, exist_ok=True)
+        click.echo(f"\nCreated new project directory at: {project_path}")
+        return project_path, True
+
+    project_path: Path = selection
+    click.echo(f"\nSelected existing project: {project_path}")
+    refresh_metadata = True
+    if allow_use_without_refresh:
+        proceed_choice = prompt_with_navigation(
+            questionary.select(
                 "How would you like to proceed with this existing project?",
                 choices=[
                     "Refresh metadata (replace local files)",
                     "Use existing project without refreshing",
                 ],
-            ).ask()
-            if proceed_choice is None:
-                click.echo("Operation cancelled.")
-                sys.exit(0)
-            refresh_metadata = proceed_choice.startswith("Refresh metadata")
+            )
+        )
+        refresh_metadata = proceed_choice.startswith("Refresh metadata")
 
-        if refresh_metadata:
-            click.echo(click.style(update_warning, fg='yellow'))
-            force_app_path_to_delete = project_path / 'force-app'
-            if force_app_path_to_delete.exists():
-                shutil.rmtree(force_app_path_to_delete)
-                if post_delete_message:
-                    click.echo(post_delete_message)
-        else:
-            click.echo("Using existing project without refreshing metadata.")
-
-        return project_path, action, refresh_metadata
-
-    use_custom_name = questionary.confirm(
-        "Would you like to provide a custom workspace name?", default=False
-    ).ask()
-    project_dir_name: str
-    if use_custom_name:
-        while True:
-            custom_name = questionary.text(
-                "Enter a workspace name:", default=persistent_alias
-            ).ask()
-            if custom_name is None:
-                click.echo("Operation cancelled.")
-                sys.exit(0)
-
-            project_dir_name = custom_name.strip()
-            if not project_dir_name:
-                click.echo("Workspace name cannot be empty. Please enter a valid name.")
-                continue
-
-            candidate_path = projects_dir / project_dir_name
-            if candidate_path.exists():
-                click.echo(
-                    click.style(
-                        f"A workspace named '{project_dir_name}' already exists. Please choose a different name.",
-                        fg='yellow',
-                    )
-                )
-                continue
-
-            break
+    if refresh_metadata:
+        click.echo(click.style(update_warning, fg='yellow'))
+        force_app_path_to_delete = project_path / 'force-app'
+        if force_app_path_to_delete.exists():
+            shutil.rmtree(force_app_path_to_delete)
+            if post_delete_message:
+                click.echo(post_delete_message)
     else:
-        ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        project_dir_name = f"{ts}_{persistent_alias}"
+        click.echo("Using existing project without refreshing metadata.")
 
-    project_path = projects_dir / project_dir_name
-    project_path.mkdir(parents=True, exist_ok=True)
-    click.echo(f"\nCreated new project directory at: {project_path}")
-    return project_path, action, True
-
+    return project_path, refresh_metadata
 
 def print_post_setup_instructions(project_path: Path, launching_tool: bool):
     """Display next steps after setup or tool launch completes."""
