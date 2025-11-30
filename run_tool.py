@@ -51,6 +51,24 @@ def _format_active_context(projects_dir: Path, config: ConfigSettings) -> list[s
     return context_lines
 
 
+def _deployment_ready_notice(projects_dir: Path, persistent_alias: str) -> str | None:
+    """Return a message when metadata changes are ready for deployment."""
+
+    workspaces = list_workspaces_for_alias(projects_dir, persistent_alias)
+    if not workspaces:
+        return None
+
+    manifest_path = workspaces[0] / 'force-app' / 'main' / 'default' / 'package.xml'
+    if manifest_path.is_file():
+        return click.style(
+            "Metadata changes detected from the last security tool run. Select 'Deploy Changes' to push updates.",
+            fg='green',
+            bold=True,
+        )
+
+    return None
+
+
 def ensure_authenticated(org_url: str, persistent_alias: str) -> bool:
     """Authenticate to the org when no valid session exists."""
 
@@ -264,6 +282,10 @@ if __name__ == '__main__':
         click.echo()
         for line in _format_active_context(projects_dir, config):
             click.echo(line)
+
+        deploy_notice = _deployment_ready_notice(projects_dir, config.persistent_alias)
+        if deploy_notice:
+            click.echo(deploy_notice)
 
         menu_choices = ["Select or Create Workspace"]
         if len(config.available_orgs) > 1:
