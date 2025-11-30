@@ -204,7 +204,7 @@ def read_config(config_path: Path) -> ConfigSettings:
         active_org = available_orgs[0]
     elif len(available_orgs) > 1:
         raise click.ClickException(
-            "Multiple org configurations detected. Set 'SalesforceOrgs.active_org' and comment out the inactive entries so only one is active."
+            "Multiple org configurations detected. Set 'SalesforceOrgs.active_org' to choose which org is active."
         )
 
     if active_org is None:
@@ -277,7 +277,10 @@ def check_auth(alias: str, announce: bool = True) -> bool:
 
 
 def _prompt_for_org(
-    label_default: str, url_default: str, alias_default: str | None = None
+    label_default: str,
+    url_example: str,
+    alias_default: str | None = None,
+    current_url: str | None = None,
 ) -> OrgConfig:
     """Collect org configuration details interactively."""
 
@@ -293,19 +296,21 @@ def _prompt_for_org(
         click.echo("Org label cannot be empty. Please provide a name.")
 
     while True:
-        org_url = questionary.text(
-            f"Login URL for '{org_label}':", default=url_default
-        ).ask()
+        url_prompt = f"Login URL for '{org_label}' (e.g., {url_example})"
+        if current_url:
+            url_prompt += f" [current: {current_url}]"
+        org_url = questionary.text(f"{url_prompt}:").ask()
         if org_url is None:
             raise click.ClickException("Configuration cancelled.")
-        org_url = org_url.strip()
+        org_url = org_url.strip() or (current_url or "")
         if org_url:
             break
         click.echo("Login URL cannot be empty. Please provide a value.")
 
     while True:
         alias = questionary.text(
-            f"Persistent alias for '{org_label}':", default=alias_default or org_label
+            f"Persistent alias for '{org_label}' (Salesforce CLI alias used for authentication and workspace names):",
+            default=alias_default or org_label,
         ).ask()
         if alias is None:
             raise click.ClickException("Configuration cancelled.")
@@ -333,6 +338,9 @@ def create_config_interactively(
             bold=True,
         )
     )
+    click.echo(
+        "The org label is a friendly name for menus, while the persistent alias is the Salesforce CLI alias reused for login and workspace naming."
+    )
 
     orgs: list[OrgConfig] = []
     url_default = 'https://login.salesforce.com'
@@ -342,8 +350,9 @@ def create_config_interactively(
             orgs.append(
                 _prompt_for_org(
                     org.name,
-                    org.target_org_url or url_default,
+                    url_default,
                     alias_default=org.persistent_alias or org.name,
+                    current_url=org.target_org_url,
                 )
             )
     else:

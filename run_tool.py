@@ -1,6 +1,7 @@
 """Command-line entry point for running the Salesforce security tool."""
 
 from pathlib import Path
+import configparser
 import subprocess
 import sys
 
@@ -11,6 +12,7 @@ from tool_utils import (
     build_metadata_plan,
     check_auth,
     choose_project_workspace,
+    ConfigSettings,
     ensure_config,
     print_post_setup_instructions,
     read_config,
@@ -44,6 +46,44 @@ def ensure_authenticated(org_url: str, persistent_alias: str) -> bool:
         ]
     )
     return login_result.success
+
+
+def switch_active_org(config_path: Path, config) -> ConfigSettings:
+    """Allow the user to choose a different active org when multiple exist."""
+
+    if len(config.available_orgs) < 2:
+        click.echo("Only one org is configured; no other orgs to switch to.")
+        return config
+
+    org_choices = [
+        questionary.Choice(title=f"{org.name} ({org.persistent_alias})", value=org.name)
+        for org in config.available_orgs
+    ]
+
+    selection = questionary.select(
+        "Select the org you want to activate:",
+        choices=org_choices,
+        default=config.active_org_name,
+    ).ask()
+
+    if selection is None:
+        click.echo("Active org unchanged.")
+        return config
+    if selection == config.active_org_name:
+        click.echo(f"'{selection}' is already the active org.")
+        return config
+
+    parser = configparser.ConfigParser()
+    parser.read(config_path)
+    if not parser.has_section('SalesforceOrgs'):
+        parser.add_section('SalesforceOrgs')
+    parser.set('SalesforceOrgs', 'active_org', selection)
+
+    with config_path.open('w', encoding='utf-8') as config_file:
+        parser.write(config_file)
+
+    click.echo(click.style(f"Active org set to '{selection}'.", fg='green'))
+    return read_config(config_path)
 
 
 def create_or_update_workspace(script_dir: Path, org_url: str, config) -> None:
@@ -164,17 +204,20 @@ if __name__ == '__main__':
     projects_dir = script_dir / 'projects'
     ensure_config(config_path, projects_dir)
     config = read_config(config_path)
-    org_url = config.target_org_url
 
     while True:
+        menu_choices = [
+            "Create or Update Workspace",
+            "Run the File Security Tool",
+            "Deploy Changes",
+        ]
+        if len(config.available_orgs) > 1:
+            menu_choices.append("Switch Active Org")
+        menu_choices.append("Exit")
+
         selection = questionary.select(
             "Choose an option:",
-            choices=[
-                "Create or Update Workspace",
-                "Run the File Security Tool",
-                "Deploy Changes",
-                "Exit",
-            ],
+            choices=menu_choices,
         ).ask()
 
         if selection is None or selection == "Exit":
@@ -182,16 +225,21 @@ if __name__ == '__main__':
             break
 
         if selection == "Create or Update Workspace":
-            create_or_update_workspace(script_dir, org_url, config)
+            create_or_update_workspace(script_dir, config.target_org_url, config)
             click.echo("\nReturning to the main menu...\n")
             continue
 
         if selection == "Run the File Security Tool":
-            run_security_tool(script_dir, org_url, config)
+            run_security_tool(script_dir, config.target_org_url, config)
             click.echo("\nReturning to the main menu...\n")
             continue
 
         if selection == "Deploy Changes":
             deploy_changes(script_dir)
+            click.echo("\nReturning to the main menu...\n")
+            continue
+
+        if selection == "Switch Active Org":
+            config = switch_active_org(config_path, config)
             click.echo("\nReturning to the main menu...\n")
 
