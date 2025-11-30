@@ -60,3 +60,13 @@ if __name__ == '__main__':
         click.echo(click.style("Deployment failed. Please review the output above.", fg='red'))
     else:
         click.echo(click.style("\n✓ Deployment Succeeded.", bold=True, fg='green'))
+
+        try:
+            manifest_path.unlink()
+        except OSError as exc:
+            click.echo(
+                click.style(
+                    f"Warning: Unable to remove deployment manifest: {exc}",
+                    fg='yellow',
+                )
+            )
