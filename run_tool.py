@@ -25,6 +25,32 @@ from tool_utils import (
 )
 
 
+def _format_active_context(projects_dir: Path, config: ConfigSettings) -> list[str]:
+    """Return formatted lines describing the active org and workspace."""
+
+    context_lines = [
+        click.style(
+            f"Active org: {config.active_org_name} ({config.persistent_alias})",
+            fg='cyan',
+        )
+    ]
+
+    org_workspaces = list_workspaces_for_alias(projects_dir, config.persistent_alias)
+    if org_workspaces:
+        context_lines.append(
+            click.style(
+                f"Active workspace: {org_workspaces[0].name}",
+                fg='cyan',
+            )
+        )
+    else:
+        context_lines.append(
+            click.style("Active workspace: none found for this org.", fg='yellow')
+        )
+
+    return context_lines
+
+
 def ensure_authenticated(org_url: str, persistent_alias: str) -> bool:
     """Authenticate to the org when no valid session exists."""
 
@@ -88,6 +114,33 @@ def switch_active_org(config_path: Path, config) -> ConfigSettings:
     return read_config(config_path)
 
 
+def ensure_workspace_for_active_org(script_dir: Path, config: ConfigSettings) -> None:
+    """Ensure an appropriate workspace is selected for the currently active org."""
+
+    projects_dir = script_dir / 'projects'
+    org_workspaces = list_workspaces_for_alias(projects_dir, config.persistent_alias)
+
+    if org_workspaces:
+        active_workspace = org_workspaces[0]
+        save_workspace_info(
+            active_workspace, config.active_org_name, config.persistent_alias
+        )
+        click.echo(
+            click.style(
+                f"Active workspace set to '{active_workspace.name}' for org '{config.active_org_name}'.",
+                fg='cyan',
+            )
+        )
+        return
+
+    click.echo(
+        click.style(
+            "No workspaces found for this org. Let's create or select one now.", fg='yellow'
+        )
+    )
+    select_or_create_workspace(script_dir, config.target_org_url, config)
+
+
 def select_or_create_workspace(script_dir: Path, org_url: str, config) -> None:
     """Select an existing workspace for the org or create a new one."""
 
@@ -143,7 +196,7 @@ def run_security_tool(script_dir: Path, org_url: str, config) -> None:
 
     project_path = existing_projects[0]
     click.echo(click.style("Using most recently updated workspace:", fg='cyan', bold=True))
-    click.echo(f"  {project_path}")
+    click.echo(f"  {project_path.name}")
 
     proceed = prompt_with_navigation(
         questionary.confirm(
@@ -207,20 +260,11 @@ if __name__ == '__main__':
     ensure_config(config_path, projects_dir)
     config = read_config(config_path)
 
-    active_org_display = f"{config.active_org_name} ({config.persistent_alias})"
-    click.echo(click.style(f"Active org: {active_org_display}", fg='cyan'))
-    org_workspaces = list_workspaces_for_alias(projects_dir, config.persistent_alias)
-    if org_workspaces:
-        click.echo(
-            click.style(
-                f"Most recent workspace for this org: {org_workspaces[0].name}",
-                fg='cyan',
-            )
-        )
-    else:
-        click.echo(click.style("No workspaces found for this org yet.", fg='yellow'))
-
     while True:
+        click.echo()
+        for line in _format_active_context(projects_dir, config):
+            click.echo(line)
+
         menu_choices = ["Select or Create Workspace"]
         if len(config.available_orgs) > 1:
             menu_choices.append("Switch Active Org")
@@ -269,6 +313,7 @@ if __name__ == '__main__':
         if selection == "Switch Active Org":
             try:
                 config = switch_active_org(config_path, config)
+                ensure_workspace_for_active_org(script_dir, config)
             except NavigationInterrupt:
                 click.echo("\nReturning to the main menu...\n")
                 continue
