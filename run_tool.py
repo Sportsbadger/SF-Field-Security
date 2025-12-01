@@ -193,7 +193,8 @@ def select_or_create_workspace(script_dir: Path, org_url: str, config) -> None:
 
     if refresh_metadata:
         if not ensure_authenticated(org_url, config.persistent_alias):
-            sys.exit(1)
+            click.echo(click.style("Authentication failed. Returning to the main menu...", fg='yellow'))
+            return
 
         metadata_plan = build_metadata_plan(project_path)
         if not retrieve_and_convert_metadata(
@@ -202,7 +203,13 @@ def select_or_create_workspace(script_dir: Path, org_url: str, config) -> None:
             config.explicit_custom_objects,
             config.persistent_alias,
         ):
-            sys.exit(1)
+            click.echo(
+                click.style(
+                    "Metadata retrieval/conversion did not complete. Returning to the main menu...",
+                    fg='yellow',
+                )
+            )
+            return
 
         save_workspace_info(project_path, config.active_org_name, config.persistent_alias)
         print_post_setup_instructions(project_path, launching_tool=False)
