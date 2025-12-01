@@ -124,6 +124,7 @@ def run_command(
             stderr=subprocess.STDOUT,
             text=True,
             encoding='utf-8',
+            errors='replace',
             cwd=cwd,
             shell=True,
         )
