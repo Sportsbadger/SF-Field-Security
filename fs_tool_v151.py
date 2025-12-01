@@ -47,6 +47,7 @@ import questionary
 import sys
 from collections import defaultdict
 import os
+import subprocess
 
 # --- Constants ---
 SF_NAMESPACE_URI = 'http://soap.sforce.com/2006/04/metadata'
@@ -1243,6 +1244,34 @@ def modify_object_permissions(meta: Path, base_dir: Path, dry_run: bool):
 
 
 
+# --- Report Helpers ---
+def _offer_to_launch_report(report_path: Path):
+    """Give the user a chance to open a generated report immediately."""
+
+    if not report_path or not report_path.exists():
+        return
+
+    launch_now = questionary.confirm(
+        "Open the report now?", default=False
+    ).ask()
+    if not launch_now:
+        return
+
+    try:
+        if sys.platform.startswith('darwin'):
+            subprocess.run(['open', str(report_path)], check=False)
+        elif os.name == 'nt':
+            os.startfile(report_path)  # type: ignore[attr-defined]
+        else:
+            subprocess.run(['xdg-open', str(report_path)], check=False)
+    except Exception as exc:
+        click.echo(
+            click.style(
+                f"Unable to launch the report automatically: {exc}", fg='yellow'
+            )
+        )
+
+
 # --- Report Functions (generate_field_security_report, inspect_permission_set_access, etc.) ---
 
 def _select_objects_and_fields_for_report_interactive(meta: Path, purpose_str: str = "the report") -> tuple[list[str], dict[str, list[str]]]:
@@ -1370,6 +1399,7 @@ def generate_field_security_report(meta: Path, base_dir: Path):
             click.echo(f"\nReport for {total_fields_processed_for_report} field(s) generated.")
             if summary_parts: click.echo(f"Included: {', '.join(summary_parts)}.")
             click.echo(f"Saved to: {output_filename}")
+            _offer_to_launch_report(output_filename)
         else:
             click.echo("\nNo data rows were generated for the report (e.g. selected fields had no relevant profiles/PS).")
             if output_filename.exists(): # Remove empty file
@@ -1490,6 +1520,7 @@ def inspect_permission_set_access(meta_base: Path, fs_tool_files_dir: Path):
                     writer.writerow({'PermissionSetName': ps_name, 'PermissionType': 'Field', 'ObjectName': obj_part, 'FieldName': field_part, 'FieldPermissions': format_access_display(field_perms_val['R'], field_perms_val['E'])})
                 for up_name in data["user_permissions"]: writer.writerow({'PermissionSetName': ps_name, 'PermissionType': 'UserPermission', 'UserPermissionName': up_name})
         click.echo(f"\nPermission Set inspection CSV report saved to: {csv_filename}")
+        _offer_to_launch_report(csv_filename)
     except IOError as e: click.echo(click.style(f"Error writing CSV report: {e}", fg='red'))
 
 def audit_all_fields_by_selected_permission_sets(meta: Path, base_dir: Path):
@@ -1548,6 +1579,7 @@ def audit_all_fields_by_selected_permission_sets(meta: Path, base_dir: Path):
                 if processed_count_for_csv % 100 == 0: click.echo(f"  Written {processed_count_for_csv}/{len(fields_to_include_in_report)} fields to CSV...")
         click.echo(f"\nField Access by PS (Field-Centric) report generated for {len(fields_to_include_in_report)} fields.")
         click.echo(f"Report saved to: {output_filename}")
+        _offer_to_launch_report(output_filename)
     except IOError as e: click.echo(click.style(f"\nError generating report: {e}", fg='red'))
     finally:
         if 'output_filename' in locals() and output_filename.exists() and processed_count_for_csv == 0:
@@ -1767,6 +1799,7 @@ def reverse_lookup_field_access(meta: Path, base_dir: Path):
             writer = csv.DictWriter(cf, fieldnames=['Object Name', 'Field Name', 'Field Type', 'Component Type', 'Component Name', 'Access Level', 'Access Via'])
             writer.writeheader(); writer.writerows(sorted(report_data, key=lambda x: (x['Object Name'], x['Field Name'], x['Component Type'], x['Component Name'])))
         click.echo(f"\nReverse lookup report saved to: {outfile}")
+        _offer_to_launch_report(outfile)
     except IOError as e: click.echo(click.style(f"\nError generating reverse lookup CSV: {e}", fg='red'))
 
 def generate_object_permissions_report(meta: Path, base_dir: Path):
@@ -1826,6 +1859,7 @@ def generate_object_permissions_report(meta: Path, base_dir: Path):
             writer = csv.DictWriter(cf, fieldnames=header_csv, extrasaction='ignore')
             writer.writeheader(); writer.writerows(report_data_rows)
         click.echo(f"\nObject permissions report generated for {len(objects_for_report)} object(s). Saved to: {output_filename}")
+        _offer_to_launch_report(output_filename)
     except IOError as e: click.echo(click.style(f"\nError generating object permissions report CSV: {e}", fg='red'))
 
 

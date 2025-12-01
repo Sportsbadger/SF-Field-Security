@@ -19,7 +19,7 @@ This repository packages a launcher (`run_tool.py`) and the interactive Field Se
 3. Update `config.ini` with your org details:
    - `target_org_url` should match the login URL for your environment.
    - `persistent_alias` is the alias that the CLI will use for the authenticated org.
-   - `explicit_custom_objects` lists any managed-package objects to include in the retrieval (comma-separated, optional).
+   - `explicit_custom_objects` lives under each `[Org <name>]` section and lists any managed-package objects to include in the retrieval for that org (comma-separated, optional).
    - `api_version` controls the package.xml API version for retrieval.
 
 ## Quick start workflow
@@ -56,5 +56,5 @@ Use `--dry-run` to preview planned bulk changes without writing to disk. Reports
 
 ## Tips and troubleshooting
 - Confirm the Salesforce CLI is authenticated with the configured alias using `sf org display --target-org <alias>` if retrieval fails.
-- If you use managed packages, populate `explicit_custom_objects` in `config.ini` so their objects are included in the package manifest.
+- If you use managed packages, populate the `explicit_custom_objects` entry for each org in `config.ini` so their objects are included in that org's package manifest.
 - Keep the CLI version updated (`sf update`) to avoid API incompatibilities when retrieving or deploying metadata.

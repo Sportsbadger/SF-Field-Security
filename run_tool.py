@@ -1,5 +1,6 @@
 """Command-line entry point for running the Salesforce security tool."""
 
+from datetime import datetime
 from pathlib import Path
 import configparser
 import subprocess
@@ -19,6 +20,7 @@ from tool_utils import (
     print_post_setup_instructions,
     prompt_with_navigation,
     read_config,
+    read_workspace_info,
     retrieve_and_convert_metadata,
     run_command,
     save_workspace_info,
@@ -37,12 +39,26 @@ def _format_active_context(projects_dir: Path, config: ConfigSettings) -> list[s
 
     org_workspaces = list_workspaces_for_alias(projects_dir, config.persistent_alias)
     if org_workspaces:
+        active_workspace = org_workspaces[0]
         context_lines.append(
             click.style(
-                f"Active workspace: {org_workspaces[0].name}",
+                f"Active workspace: {active_workspace.name}",
                 fg='cyan',
             )
         )
+
+        workspace_info = read_workspace_info(active_workspace)
+        last_updated_raw = workspace_info.get('last_updated') if workspace_info else None
+        if last_updated_raw:
+            try:
+                refreshed_at = datetime.fromisoformat(last_updated_raw)
+                formatted = refreshed_at.strftime('%Y-%m-%d %H:%M')
+            except ValueError:
+                formatted = last_updated_raw
+
+            context_lines.append(
+                click.style(f"Last refreshed: {formatted}", fg='cyan')
+            )
     else:
         context_lines.append(
             click.style("Active workspace: none found for this org.", fg='yellow')

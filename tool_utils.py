@@ -52,10 +52,10 @@ class ConfigSettings:
 
     target_org_url: str
     persistent_alias: str
-    explicit_custom_objects: list[str]
     api_version: str
     active_org_name: str
     available_orgs: list['OrgConfig']
+    explicit_custom_objects: list[str]
 
 
 @dataclass
@@ -65,6 +65,7 @@ class OrgConfig:
     name: str
     target_org_url: str
     persistent_alias: str
+    explicit_custom_objects: list[str]
 
 
 @dataclass
@@ -181,22 +182,35 @@ def read_config(config_path: Path) -> ConfigSettings:
     parser = configparser.ConfigParser()
     parser.read(config_path)
 
-    explicit_objects_str = parser.get(
+    legacy_explicit_objects_str = parser.get(
         'ToolOptions', 'explicit_custom_objects', fallback=''
     ).strip()
-    explicit_custom_objects = [
-        obj.strip() for obj in explicit_objects_str.split(',') if obj.strip()
+    legacy_explicit_custom_objects = [
+        obj.strip()
+        for obj in legacy_explicit_objects_str.split(',')
+        if obj.strip()
     ]
 
     org_sections = [name for name in parser.sections() if name.startswith('Org ')]
     available_orgs: list[OrgConfig] = []
     for section in org_sections:
         org_name = section[4:].strip() or 'default'
+        org_explicit_objects_str = parser.get(
+            section, 'explicit_custom_objects', fallback=''
+        ).strip()
+        org_explicit_custom_objects = [
+            obj.strip()
+            for obj in org_explicit_objects_str.split(',')
+            if obj.strip()
+        ]
+        if not org_explicit_custom_objects:
+            org_explicit_custom_objects = legacy_explicit_custom_objects
         available_orgs.append(
             OrgConfig(
                 name=org_name,
                 target_org_url=parser.get(section, 'target_org_url', fallback='').strip(),
                 persistent_alias=parser.get(section, 'persistent_alias', fallback='').strip(),
+                explicit_custom_objects=org_explicit_custom_objects,
             )
         )
 
@@ -207,6 +221,7 @@ def read_config(config_path: Path) -> ConfigSettings:
                 name='default',
                 target_org_url=parser.get('Salesforce', 'target_org_url', fallback='').strip(),
                 persistent_alias=parser.get('Salesforce', 'persistent_alias', fallback='').strip(),
+                explicit_custom_objects=legacy_explicit_custom_objects,
             )
         )
 
@@ -244,10 +259,10 @@ def read_config(config_path: Path) -> ConfigSettings:
     return ConfigSettings(
         target_org_url=active_org.target_org_url,
         persistent_alias=active_org.persistent_alias,
-        explicit_custom_objects=explicit_custom_objects,
         api_version=parser.get('ToolOptions', 'api_version', fallback='60.0').strip(),
         active_org_name=active_org.name,
         available_orgs=available_orgs,
+        explicit_custom_objects=active_org.explicit_custom_objects,
     )
 
 
@@ -352,6 +367,7 @@ def _prompt_for_org(
     url_example: str,
     alias_default: str | None = None,
     current_url: str | None = None,
+    explicit_custom_objects: str = '',
 ) -> OrgConfig:
     """Collect org configuration details interactively."""
 
@@ -390,14 +406,31 @@ def _prompt_for_org(
             break
         click.echo("Alias cannot be empty. Please provide a value.")
 
-    return OrgConfig(name=org_label, target_org_url=org_url, persistent_alias=alias)
+    explicit_objects_value = (
+        questionary.text(
+            f"Comma-separated list of explicit custom objects for '{org_label}' (optional):",
+            default=explicit_custom_objects,
+        ).ask()
+        or ''
+    ).strip()
+    explicit_custom_objects_list = [
+        obj.strip()
+        for obj in explicit_objects_value.split(',')
+        if obj.strip()
+    ]
+
+    return OrgConfig(
+        name=org_label,
+        target_org_url=org_url,
+        persistent_alias=alias,
+        explicit_custom_objects=explicit_custom_objects_list,
+    )
 
 
 def create_config_interactively(
     config_path: Path,
     existing_orgs: list[OrgConfig] | None = None,
     active_org_name: str | None = None,
-    explicit_custom_objects: str = '',
     api_version: str = '60.0',
 ) -> None:
     """Guide the user through creating a config.ini file."""
@@ -424,6 +457,7 @@ def create_config_interactively(
                     url_default,
                     alias_default=org.persistent_alias or org.name,
                     current_url=org.target_org_url,
+                    explicit_custom_objects=','.join(org.explicit_custom_objects),
                 )
             )
     else:
@@ -445,14 +479,6 @@ def create_config_interactively(
         if active_org_name is None:
             raise click.ClickException("Configuration cancelled.")
 
-    explicit_custom_objects = (
-        questionary.text(
-            "Comma-separated list of explicit custom objects (optional):",
-            default=explicit_custom_objects,
-        ).ask()
-        or ''
-    ).strip()
-
     api_version = (
         questionary.text("API version to use:", default=api_version or '60.0').ask()
         or '60.0'
@@ -471,12 +497,14 @@ def create_config_interactively(
         config_lines.append(f"[Org {org.name}]")
         config_lines.append(f"target_org_url = {org.target_org_url}")
         config_lines.append(f"persistent_alias = {org.persistent_alias}")
+        config_lines.append(
+            f"explicit_custom_objects = {','.join(org.explicit_custom_objects)}"
+        )
         config_lines.append("")
 
     config_lines.extend(
         [
             "[ToolOptions]",
-            f"explicit_custom_objects = {explicit_custom_objects}",
             f"api_version = {api_version}",
             "",
         ]
@@ -520,9 +548,6 @@ def ensure_config(config_path: Path, projects_dir: Path) -> None:
         config_path,
         existing_orgs=existing_settings.available_orgs if existing_settings else None,
         active_org_name=existing_settings.active_org_name if existing_settings else None,
-        explicit_custom_objects=','.join(existing_settings.explicit_custom_objects)
-        if existing_settings
-        else '',
         api_version=existing_settings.api_version if existing_settings else '60.0',
     )
 
@@ -583,9 +608,15 @@ def retrieve_and_convert_metadata(
             target_org_alias,
             '--target-metadata-dir',
             str(plan.temp_retrieve_dir),
-        ]
+            '--json',
+        ],
+        capture_output=True,
+        check=False,
     )
     if not retrieve_result.success:
+        click.echo(click.style("Metadata retrieval failed.", fg='red'))
+        if retrieve_result.stdout:
+            click.echo(retrieve_result.stdout)
         return False
 
     zip_path = plan.temp_retrieve_dir / 'unpackaged.zip'
@@ -611,9 +642,13 @@ def retrieve_and_convert_metadata(
             str(plan.force_app_path),
         ],
         cwd=plan.project_path,
+        capture_output=True,
+        check=False,
     )
     if not convert_result.success:
         click.echo(click.style("Metadata conversion failed!", fg='red'))
+        if convert_result.stdout:
+            click.echo(convert_result.stdout)
         return False
 
     cleanup_paths = [plan.temp_retrieve_dir, plan.mdapi_source_path]
