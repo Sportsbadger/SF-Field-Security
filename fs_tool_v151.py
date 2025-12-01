@@ -1577,20 +1577,33 @@ def rollback_changes(meta: Path, base_dir: Path):
     confirm_parts.append("\nOverwrite current files? (CANNOT BE UNDONE)")
     if not questionary.confirm('\n'.join(confirm_parts), default=False).ask(): click.echo('Rollback cancelled.'); return
     click.echo(f"Starting rollback from: {sel_backup_name}")
-    restored_p_count, restored_ps_count, err_count = 0, 0, 0; pkg_restored = False
+    restored_p_count, restored_ps_count, err_count = 0, 0, 0
+    pkg_restored = False; pkg_regenerated = False
+    restored_profile_names, restored_permset_names = [], []
     try:
         if has_profiles:
             target_profiles_dir.mkdir(parents=True, exist_ok=True)
-            for f_to_restore in backup_profiles_dir.glob(f'*{PROFILE_SUFFIX}'): shutil.copy2(f_to_restore, target_profiles_dir / f_to_restore.name); restored_p_count += 1
+            for f_to_restore in backup_profiles_dir.glob(f'*{PROFILE_SUFFIX}'):
+                shutil.copy2(f_to_restore, target_profiles_dir / f_to_restore.name); restored_p_count += 1
+                restored_profile_names.append(f_to_restore.stem)
         if has_permsets:
             target_permsets_dir.mkdir(parents=True, exist_ok=True)
-            for f_to_restore in backup_permsets_dir.glob(f'*{PERMISSIONSET_SUFFIX}'): shutil.copy2(f_to_restore, target_permsets_dir / f_to_restore.name); restored_ps_count += 1
+            for f_to_restore in backup_permsets_dir.glob(f'*{PERMISSIONSET_SUFFIX}'):
+                shutil.copy2(f_to_restore, target_permsets_dir / f_to_restore.name); restored_ps_count += 1
+                restored_permset_names.append(f_to_restore.stem)
         if has_pkg: shutil.copy2(backup_pkg_file, target_pkg_file); pkg_restored = True
+        elif restored_profile_names or restored_permset_names:
+            pkg_tree = generate_package_xml_for_deployment(restored_profile_names, restored_permset_names)
+            if pkg_tree:
+                pkg_tree.write(target_pkg_file, encoding='UTF-8', xml_declaration=True)
+                pkg_regenerated = True
+                click.echo(f"package.xml regenerated at {target_pkg_file} for restored items.")
     except Exception as e: click.echo(f"Error during rollback: {e}"); err_count += 1
     summary = []
     if restored_p_count > 0: summary.append(f"{restored_p_count} profile(s)")
     if restored_ps_count > 0: summary.append(f"{restored_ps_count} permission set(s)")
     if pkg_restored: summary.append("package.xml")
+    elif pkg_regenerated: summary.append("package.xml (regenerated)")
     if err_count > 0: click.echo(click.style(f"\nRollback finished with {err_count} errors.", fg='red'))
     elif not summary: click.echo(f"\nRollback finished, but no items were actually restored.")
     else: click.echo(click.style(f"\nRollback complete.", fg='green'))
