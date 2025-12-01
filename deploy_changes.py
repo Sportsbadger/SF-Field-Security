@@ -5,7 +5,7 @@ import sys
 
 import click
 
-from tool_utils import check_auth, read_config, run_command
+from tool_utils import check_auth, list_workspaces_for_alias, read_config, run_command
 
 if __name__ == '__main__':
     click.echo(click.style("=== Step 3: Deploy Changes ===", bold=True, fg='cyan'))
@@ -25,11 +25,17 @@ if __name__ == '__main__':
         sys.exit(1)
 
     projects_dir = script_dir / 'projects'
-    if not projects_dir.is_dir() or not any(projects_dir.iterdir()):
-        click.echo(click.style("Error: No project directories found.", fg='red'))
+    workspaces = list_workspaces_for_alias(projects_dir, persistent_alias)
+    if not workspaces:
+        click.echo(
+            click.style(
+                f"Error: No project workspaces found for alias '{persistent_alias}'.",
+                fg='red',
+            )
+        )
         sys.exit(1)
 
-    latest_project = max(projects_dir.iterdir(), key=lambda p: p.stat().st_ctime)
+    latest_project = workspaces[0]
     click.echo(f"Found latest project to deploy from: {latest_project.name}")
 
     manifest_path = latest_project / 'force-app' / 'main' / 'default' / 'package.xml'
