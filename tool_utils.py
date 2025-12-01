@@ -103,6 +103,8 @@ def run_command(
                 command_str,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 shell=True,
                 check=check,
                 cwd=cwd,
