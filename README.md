@@ -29,19 +29,6 @@ This repository packages a launcher (`run_tool.py`), setup utilities, and the in
    - If `config.ini` or a workspace is missing, the guided config creator launches. You can define multiple orgs, pick which org is active, and set the API version. The tool writes `[Org <name>]` sections under `[SalesforceOrgs]` and remembers the active org.
    - When refreshing metadata, the launcher rebuilds the workspace’s `force-app` folder from a clean root using a fresh manifest and conversion process.
 
-## Configuration reference
-- `config.ini` is organized into multiple `[Org <name>]` sections so you can store sandbox, prod, and other targets. The `[SalesforceOrgs]` section controls which org is active, and `[ToolOptions]` stores the `api_version`.
-- Each `[Org <name>]` entry supports:
-  - `target_org_url` – Login URL for that org.
-  - `persistent_alias` – Salesforce CLI alias reused for authentication and workspace naming.
-  - `explicit_custom_objects` – Comma-separated managed-package objects to include in retrieval (optional).
-- Switch the active org from the launcher menu (**Switch Active Org**). The tool automatically aligns the active workspace to the selected org.
-
-## Workspace management
-- Workspaces live under `projects/` and are filtered per org alias. The launcher suggests the most recently updated workspace, but you can select any existing one or create a new folder (with a timestamp or custom name).
-- When choosing an existing workspace, you can **refresh** (deletes and recreates `force-app` from the retrieved metadata) or **use without refreshing** to preserve current files.
-- Workspace metadata is stored in `.workspace_info.json` so the tool can display the active org, alias, and last refreshed time.
-
 ## Quick start workflow
 Use the launcher to authenticate, retrieve metadata, and open the interactive security tool in one flow.
 
@@ -53,6 +40,50 @@ Use the launcher to authenticate, retrieve metadata, and open the interactive se
 3. Choose **Select or Create Workspace** to build or refresh a project. Authentication prompts appear automatically when no active `sf` session exists for the configured alias.
 4. After metadata retrieval, the launcher converts MDAPI output into `force-app` source format and cleans temporary folders, rebuilding the branch from the workspace root.
 5. Select **Run the File Security Tool** to start `fs_tool_v151.py` against the prepared project. When you exit the tool, you can optionally trigger **Deploy Changes**.
+
+## Configuration reference
+- If `config.ini` does not exist yet, the launcher creates it automatically during your first run.
+- `config.ini` is organized into multiple `[Org <name>]` sections so you can store sandbox, prod, and other targets. The `[SalesforceOrgs]` section controls which org is active, and `[ToolOptions]` stores the `api_version`.
+- Each `[Org <name>]` entry supports:
+  - `target_org_url` – Login URL for that org.
+  - `persistent_alias` – Salesforce CLI alias reused for authentication and workspace naming.
+  - `explicit_custom_objects` – Comma-separated managed-package objects to include in retrieval (optional).
+- Switch the active org from the launcher menu (**Switch Active Org**). The tool automatically aligns the active workspace to the selected org.
+
+### Example `config.ini`
+Create your own `config.ini` in the repository root using a structure like this:
+
+```
+[SalesforceOrgs]
+active_org = sandbox
+
+[Org sandbox]
+# The full login URL of your target Salesforce org.
+target_org_url = https://example.sandbox.my.salesforce.com/
+
+# A memorable, persistent alias for this org connection. No spaces or special characters.
+persistent_alias = sandbox
+
+# A comma-separated list of any specific custom objects to include for this org.
+# This is useful for managed package objects that are not retrieved by default with '*'.
+explicit_custom_objects = Custom_Object__c,Custom_Object_2__c
+
+[Org production]
+target_org_url = https://login.salesforce.com
+persistent_alias = prod
+explicit_custom_objects =
+
+[ToolOptions]
+# The API version to use for the package.xml manifest
+api_version = 60.0
+```
+
+Add or remove `[Org <name>]` sections as needed and update `active_org` to the one you want to use.
+
+## Workspace management
+- Workspaces live under `projects/` and are filtered per org alias. The launcher suggests the most recently updated workspace, but you can select any existing one or create a new folder (with a timestamp or custom name).
+- When choosing an existing workspace, you can **refresh** (deletes and recreates `force-app` from the retrieved metadata) or **use without refreshing** to preserve current files.
+- Workspace metadata is stored in `.workspace_info.json` so the tool can display the active org, alias, and last refreshed time.
 
 ## FS Tool overview and commands
 `fs_tool_v151.py` is an interactive CLI for analyzing and editing profile/permission set access within the retrieved project. You can pass `--project`, `--metadata`, and `--dry-run` flags when launching it directly.
