@@ -1554,60 +1554,167 @@ def audit_all_fields_by_selected_permission_sets(meta: Path, base_dir: Path):
              try: output_filename.unlink(); click.echo(f"Cleaned up empty report file: {output_filename}")
              except OSError: pass
 
+def _discover_backup_contents(backup_path: Path) -> dict:
+    """Return the files contained in a backup directory.
+
+    This inspects the expected backup layout and returns concrete file paths so the
+    restore workflow can be deterministic and easily testable.
+    """
+    profiles_dir = backup_path / 'profiles'
+    permsets_dir = backup_path / 'permissionsets'
+    pkg_file = backup_path / 'package.xml'
+
+    profile_files = sorted(profiles_dir.glob(f'*{PROFILE_SUFFIX}')) if profiles_dir.is_dir() else []
+    permset_files = sorted(permsets_dir.glob(f'*{PERMISSIONSET_SUFFIX}')) if permsets_dir.is_dir() else []
+    package_file = pkg_file if pkg_file.is_file() else None
+
+    return {
+        "profile_files": profile_files,
+        "permset_files": permset_files,
+        "package_file": package_file,
+    }
+
+
+def _component_name_from_file(file_path: Path, suffix: str) -> str:
+    return file_path.name[:-len(suffix)] if file_path.name.endswith(suffix) else file_path.stem
+
+
+def _restore_backup_contents(meta: Path, base_dir: Path, backup_path: Path, contents: dict) -> dict:
+    """Restore backup contents to the metadata directory.
+
+    A safety backup of the current state is created automatically when the
+    target files already exist to make the operation reversible.
+    """
+    target_profiles_dir = meta / 'profiles'
+    target_permsets_dir = meta / 'permissionsets'
+    target_pkg_file = meta / 'package.xml'
+
+    restored_profile_names, restored_permset_names = [], []
+    pkg_restored = False
+    pkg_regenerated = False
+    errors: list[str] = []
+    safety_backup_path = None
+
+    profiles_to_backup_now = [
+        _component_name_from_file(p, PROFILE_SUFFIX)
+        for p in contents["profile_files"]
+        if (target_profiles_dir / p.name).exists()
+    ]
+    permsets_to_backup_now = [
+        _component_name_from_file(p, PERMISSIONSET_SUFFIX)
+        for p in contents["permset_files"]
+        if (target_permsets_dir / p.name).exists()
+    ]
+    pkg_exists_to_backup = contents.get("package_file") is not None and target_pkg_file.exists()
+
+    if profiles_to_backup_now or permsets_to_backup_now or pkg_exists_to_backup:
+        try:
+            safety_backup_path, _, _ = create_backup(
+                meta,
+                base_dir,
+                profiles_to_backup_now,
+                permsets_to_backup_now,
+                f"pre_restore_{backup_path.name}"
+            )
+            click.echo(f"Created safety backup at: {safety_backup_path}")
+        except Exception as e:
+            errors.append(f"Safety backup failed: {e}")
+
+    try:
+        if contents["profile_files"]:
+            target_profiles_dir.mkdir(parents=True, exist_ok=True)
+            for profile_file in contents["profile_files"]:
+                dest = target_profiles_dir / profile_file.name
+                shutil.copy2(profile_file, dest)
+                restored_profile_names.append(_component_name_from_file(profile_file, PROFILE_SUFFIX))
+        if contents["permset_files"]:
+            target_permsets_dir.mkdir(parents=True, exist_ok=True)
+            for permset_file in contents["permset_files"]:
+                dest = target_permsets_dir / permset_file.name
+                shutil.copy2(permset_file, dest)
+                restored_permset_names.append(_component_name_from_file(permset_file, PERMISSIONSET_SUFFIX))
+        if contents.get("package_file"):
+            target_pkg_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(contents["package_file"], target_pkg_file)
+            pkg_restored = True
+        elif restored_profile_names or restored_permset_names:
+            pkg_tree = generate_package_xml_for_deployment(restored_profile_names, restored_permset_names)
+            if pkg_tree:
+                target_pkg_file.parent.mkdir(parents=True, exist_ok=True)
+                pkg_tree.write(target_pkg_file, encoding='UTF-8', xml_declaration=True)
+                pkg_regenerated = True
+                click.echo(f"package.xml regenerated at {target_pkg_file} for restored items.")
+    except Exception as e:
+        errors.append(f"Restore failed: {e}")
+
+    return {
+        "restored_profiles": restored_profile_names,
+        "restored_permsets": restored_permset_names,
+        "package_restored": pkg_restored,
+        "package_regenerated": pkg_regenerated,
+        "errors": errors,
+        "safety_backup_path": safety_backup_path,
+    }
+
+
 def rollback_changes(meta: Path, base_dir: Path):
     click.echo("\n--- Rollback Changes from Backup ---")
     backups_dir = base_dir / 'fs_backups'
     if not backups_dir.is_dir() or not any(backups_dir.iterdir()): click.echo('No backups found.'); return
-    choices = sorted([d.name for d in backups_dir.iterdir() if d.is_dir()], reverse=True)
-    if not choices: click.echo('No valid backup directories found.'); return
-    sel_backup_name = questionary.select('Select backup to restore:', choices=choices).ask()
-    if not sel_backup_name: click.echo('Cancelled.'); return
-    backup_path = backups_dir / sel_backup_name
-    backup_profiles_dir = backup_path / 'profiles'; target_profiles_dir = meta / 'profiles'
-    backup_permsets_dir = backup_path / 'permissionsets'; target_permsets_dir = meta / 'permissionsets'
-    backup_pkg_file = backup_path / 'package.xml'; target_pkg_file = meta / 'package.xml'
-    has_profiles = backup_profiles_dir.is_dir() and any(backup_profiles_dir.glob(f'*{PROFILE_SUFFIX}'))
-    has_permsets = backup_permsets_dir.is_dir() and any(backup_permsets_dir.glob(f'*{PERMISSIONSET_SUFFIX}'))
-    has_pkg = backup_pkg_file.is_file()
-    if not has_profiles and not has_permsets and not has_pkg: click.echo(f"Backup '{sel_backup_name}' contains no items to restore."); return
-    confirm_parts = [f"Restore from backup '{sel_backup_name}':"]
-    if has_profiles: confirm_parts.append(f"  - Profiles -> {target_profiles_dir}")
-    if has_permsets: confirm_parts.append(f"  - Permission Sets -> {target_permsets_dir}")
-    if has_pkg: confirm_parts.append(f"  - package.xml -> {target_pkg_file}")
-    confirm_parts.append("\nOverwrite current files? (CANNOT BE UNDONE)")
-    if not questionary.confirm('\n'.join(confirm_parts), default=False).ask(): click.echo('Rollback cancelled.'); return
-    click.echo(f"Starting rollback from: {sel_backup_name}")
-    restored_p_count, restored_ps_count, err_count = 0, 0, 0
-    pkg_restored = False; pkg_regenerated = False
-    restored_profile_names, restored_permset_names = [], []
-    try:
-        if has_profiles:
-            target_profiles_dir.mkdir(parents=True, exist_ok=True)
-            for f_to_restore in backup_profiles_dir.glob(f'*{PROFILE_SUFFIX}'):
-                shutil.copy2(f_to_restore, target_profiles_dir / f_to_restore.name); restored_p_count += 1
-                restored_profile_names.append(f_to_restore.stem)
-        if has_permsets:
-            target_permsets_dir.mkdir(parents=True, exist_ok=True)
-            for f_to_restore in backup_permsets_dir.glob(f'*{PERMISSIONSET_SUFFIX}'):
-                shutil.copy2(f_to_restore, target_permsets_dir / f_to_restore.name); restored_ps_count += 1
-                restored_permset_names.append(f_to_restore.stem)
-        if has_pkg: shutil.copy2(backup_pkg_file, target_pkg_file); pkg_restored = True
-        elif restored_profile_names or restored_permset_names:
-            pkg_tree = generate_package_xml_for_deployment(restored_profile_names, restored_permset_names)
-            if pkg_tree:
-                pkg_tree.write(target_pkg_file, encoding='UTF-8', xml_declaration=True)
-                pkg_regenerated = True
-                click.echo(f"package.xml regenerated at {target_pkg_file} for restored items.")
-    except Exception as e: click.echo(f"Error during rollback: {e}"); err_count += 1
+
+    available_backups = [d for d in backups_dir.iterdir() if d.is_dir()]
+    if not available_backups: click.echo('No valid backup directories found.'); return
+
+    backup_choices = []
+    for backup_dir in sorted(available_backups, key=lambda p: p.name, reverse=True):
+        contents = _discover_backup_contents(backup_dir)
+        counts = []
+        if contents["profile_files"]: counts.append(f"{len(contents['profile_files'])} profile(s)")
+        if contents["permset_files"]: counts.append(f"{len(contents['permset_files'])} permission set(s)")
+        if contents.get("package_file"): counts.append("package.xml")
+        counts_str = ", ".join(counts) if counts else "empty"
+        backup_choices.append(questionary.Choice(f"{backup_dir.name} ({counts_str})", value=backup_dir))
+
+    sel_backup_path = questionary.select('Select backup to restore:', choices=backup_choices).ask()
+    if not sel_backup_path: click.echo('Cancelled.'); return
+
+    backup_path = Path(sel_backup_path)
+    contents = _discover_backup_contents(backup_path)
+    if not contents["profile_files"] and not contents["permset_files"] and not contents.get("package_file"):
+        click.echo(f"Backup '{backup_path.name}' contains no items to restore."); return
+
+    preview_lines = [f"Restore from backup '{backup_path.name}':"]
+    if contents["profile_files"]:
+        preview_lines.append(f"  - Profiles ({len(contents['profile_files'])}) -> {meta / 'profiles'}")
+    if contents["permset_files"]:
+        preview_lines.append(f"  - Permission Sets ({len(contents['permset_files'])}) -> {meta / 'permissionsets'}")
+    if contents.get("package_file"):
+        preview_lines.append(f"  - package.xml -> {meta / 'package.xml'}")
+    preview_lines.append("\nOverwrite current files? (CANNOT BE UNDONE)")
+
+    if not questionary.confirm('\n'.join(preview_lines), default=False).ask():
+        click.echo('Rollback cancelled.'); return
+
+    click.echo(f"Starting rollback from: {backup_path.name}")
+    result = _restore_backup_contents(meta, base_dir, backup_path, contents)
+
     summary = []
-    if restored_p_count > 0: summary.append(f"{restored_p_count} profile(s)")
-    if restored_ps_count > 0: summary.append(f"{restored_ps_count} permission set(s)")
-    if pkg_restored: summary.append("package.xml")
-    elif pkg_regenerated: summary.append("package.xml (regenerated)")
-    if err_count > 0: click.echo(click.style(f"\nRollback finished with {err_count} errors.", fg='red'))
-    elif not summary: click.echo(f"\nRollback finished, but no items were actually restored.")
-    else: click.echo(click.style(f"\nRollback complete.", fg='green'))
-    if summary: click.echo(f"Restored: {', '.join(summary)}.\nRemember to deploy the restored metadata.");
+    if result["restored_profiles"]: summary.append(f"{len(result['restored_profiles'])} profile(s)")
+    if result["restored_permsets"]: summary.append(f"{len(result['restored_permsets'])} permission set(s)")
+    if result["package_restored"]: summary.append("package.xml")
+    elif result["package_regenerated"]: summary.append("package.xml (regenerated)")
+
+    if result["errors"]:
+        click.echo(click.style("\nRollback finished with errors:", fg='red'))
+        for err in result["errors"]: click.echo(f"  - {err}")
+    elif not summary:
+        click.echo("\nRollback finished, but no items were actually restored.")
+    else:
+        click.echo(click.style("\nRollback complete.", fg='green'))
+    if result.get("safety_backup_path"):
+        click.echo(f"Safety backup created at: {result['safety_backup_path']}")
+    if summary:
+        click.echo(f"Restored: {', '.join(summary)}.\nRemember to deploy the restored metadata.")
 
 def reverse_lookup_field_access(meta: Path, base_dir: Path):
     click.echo("\n--- Who has access to this field? (Reverse Lookup) ---")
