@@ -1863,6 +1863,137 @@ def generate_object_permissions_report(meta: Path, base_dir: Path):
     except IOError as e: click.echo(click.style(f"\nError generating object permissions report CSV: {e}", fg='red'))
 
 
+def generate_user_field_access_report(meta_base: Path, fs_tool_files_dir: Path):
+    click.echo("\n--- User Field Access Report ---")
+    user_name = questionary.text("Enter the user's name or identifier:").ask()
+    if not user_name:
+        click.echo("No user specified; cancelling report.")
+        return
+
+    profile_choice = None
+    all_profiles = list_profiles(meta_base)
+    if all_profiles:
+        profile_choice = questionary.select(
+            "Select the user's Profile (optional):",
+            choices=[questionary.Choice("<None>", value=None)] + [questionary.Choice(p) for p in all_profiles],
+            qmark='>', pointer='->'
+        ).ask()
+    else:
+        click.echo("No profiles found in metadata; skipping profile selection.")
+
+    permset_selection: list[str] = []
+    all_permsets = list_permission_sets(meta_base)
+    if all_permsets:
+        ps_choices = [questionary.Choice("<None>", value="<None>"), questionary.Choice(ALL_CHOICE_VALUE, value=ALL_CHOICE_VALUE)]
+        ps_choices.extend(questionary.Choice(ps) for ps in all_permsets)
+        selected_ps = questionary.checkbox(
+            "Select Permission Sets assigned to the user:",
+            choices=ps_choices,
+            qmark='>', pointer='->'
+        ).ask()
+        if selected_ps:
+            if ALL_CHOICE_VALUE in selected_ps:
+                permset_selection = sorted(all_permsets)
+            elif "<None>" in selected_ps and len(selected_ps) == 1:
+                permset_selection = []
+            else:
+                permset_selection = sorted([ps for ps in selected_ps if ps not in {ALL_CHOICE_VALUE, "<None>"}])
+    else:
+        click.echo("No permission sets found in metadata.")
+
+    if profile_choice is None and not permset_selection:
+        click.echo("No profile or permission sets selected; nothing to report.")
+        return
+
+    profile_root = None
+    profile_override = (False, None)
+    if profile_choice:
+        profile_root = load_xml(meta_base / 'profiles' / f"{profile_choice}{PROFILE_SUFFIX}")[1]
+        profile_override = check_for_system_overrides(profile_root, "Profile")
+
+    permset_roots: dict[str, ET.Element | None] = {}
+    permset_overrides: dict[str, tuple[bool, str | None]] = {}
+    for ps_name in permset_selection:
+        ps_root = load_xml(meta_base / 'permissionsets' / f"{ps_name}{PERMISSIONSET_SUFFIX}")[1]
+        permset_roots[ps_name] = ps_root
+        permset_overrides[ps_name] = check_for_system_overrides(ps_root, "PermissionSet")
+
+    click.echo("\nCompiling field access...")
+    objects_in_project = list_objects(meta_base)
+    report_rows = []
+    total_fields_processed = 0
+    for obj_name in objects_in_project:
+        fields = list_fields(meta_base, obj_name)
+        for field_name, field_type in fields:
+            full_field_api = f"{obj_name}.{field_name}"
+            readable = False
+            editable = False
+            access_sources = []
+
+            if profile_override[0]:
+                readable = True
+                editable = profile_override[1] == "Modify All Data" or editable
+                access_sources.append(f"Profile: {profile_choice} ({profile_override[1]})")
+            elif profile_choice and profile_root is not None:
+                r_prof, e_prof = get_field_permissions_from_profile_root(profile_root, full_field_api)
+                readable = readable or r_prof
+                editable = editable or e_prof
+                if r_prof or e_prof:
+                    access_sources.append(f"Profile: {profile_choice}")
+
+            for ps_name in permset_selection:
+                ps_root = permset_roots.get(ps_name)
+                if ps_root is None:
+                    continue
+                ps_override = permset_overrides.get(ps_name, (False, None))
+                ps_r = False
+                ps_e = False
+                source_label = None
+                if ps_override[0]:
+                    ps_r = True
+                    ps_e = ps_override[1] == "Modify All Data" or ps_e
+                    source_label = f"Permission Set: {ps_name} ({ps_override[1]})"
+                else:
+                    ps_r, ps_e = get_effective_field_permissions_from_ps_root(ps_root, obj_name, full_field_api)
+                    if ps_r or ps_e:
+                        source_label = f"Permission Set: {ps_name}"
+                readable = readable or ps_r
+                editable = editable or ps_e
+                if source_label and (ps_r or ps_e):
+                    access_sources.append(source_label)
+
+            if editable:
+                readable = True
+
+            total_fields_processed += 1
+            access_display = format_access_display(readable, editable)
+            report_rows.append({
+                'User': user_name,
+                'Object Name': obj_name,
+                'Field Name': field_name,
+                'Field Type': field_type,
+                'Access': access_display,
+                'Access Sources': ", ".join(sorted(set(access_sources))) if access_sources else 'No access'
+            })
+
+    if not report_rows:
+        click.echo("No fields found to report.")
+        return
+
+    ts = datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S')
+    outfile = fs_tool_files_dir / f"User_Field_Access_{user_name.replace(' ', '_')}_{ts}.csv"
+    try:
+        with open(outfile, 'w', newline='', encoding='utf-8') as cf:
+            writer = csv.DictWriter(cf, fieldnames=['User', 'Object Name', 'Field Name', 'Field Type', 'Access', 'Access Sources'])
+            writer.writeheader()
+            writer.writerows(sorted(report_rows, key=lambda r: (r['Object Name'], r['Field Name'])))
+        click.echo(click.style(f"\nField access report generated for {user_name} covering {total_fields_processed} fields.", bold=True))
+        click.echo(f"Saved to: {outfile}")
+        _offer_to_launch_report(outfile)
+    except IOError as e:
+        click.echo(click.style(f"Error writing user field access report: {e}", fg='red'))
+
+
 # --- Main CLI ---
 @click.command()
 @click.option('--project', default='.', help='SFDX project root path.')
@@ -1902,6 +2033,7 @@ def main(project, metadata, dry_run):
                 'Modify Field Security',
                 'Generate Object Permissions Report',
                 'Modify Object Permissions',
+                'Generate User Field Access Report',
                 'Who has access to this field? (Reverse Lookup)',
                 'Audit Permission Sets (By Perm Set)',
                 'Audit Permission Sets (By Field)',
@@ -1919,6 +2051,8 @@ def main(project, metadata, dry_run):
             generate_object_permissions_report(meta_base, fs_tool_dir)
         elif main_choice == 'Modify Object Permissions':
             modify_object_permissions(meta_base, fs_tool_dir, dry_run)
+        elif main_choice == 'Generate User Field Access Report':
+            generate_user_field_access_report(meta_base, fs_tool_dir)
         elif main_choice == 'Who has access to this field? (Reverse Lookup)':
             reverse_lookup_field_access(meta_base, fs_tool_dir)
         elif main_choice == 'Audit Permission Sets (By Perm Set)':
