@@ -77,8 +77,18 @@ if __name__ == '__main__':
         ):
             sys.exit(1)
 
-        save_workspace_info(project_path, config.active_org_name, persistent_alias)
+        save_workspace_info(
+            project_path,
+            config.active_org_name,
+            persistent_alias,
+            update_timestamp=True,
+        )
         print_post_setup_instructions(project_path, launching_tool=False)
     else:
-        save_workspace_info(project_path, config.active_org_name, persistent_alias)
+        save_workspace_info(
+            project_path,
+            config.active_org_name,
+            persistent_alias,
+            update_timestamp=False,
+        )
         click.echo("Using existing project without refreshing metadata.")

@@ -327,14 +327,22 @@ def read_workspace_info(project_path: Path) -> dict | None:
         return None
 
 
-def save_workspace_info(project_path: Path, org_name: str, persistent_alias: str) -> None:
+def save_workspace_info(
+    project_path: Path, org_name: str, persistent_alias: str, update_timestamp: bool = True
+) -> None:
     """Persist workspace metadata for later filtering and display."""
 
+    existing_info = read_workspace_info(project_path) or {}
     info_path = project_path / WORKSPACE_INFO_FILENAME
+    last_updated = (
+        datetime.datetime.now().isoformat()
+        if update_timestamp
+        else existing_info.get('last_updated')
+    )
     info = {
         'org_name': org_name,
         'persistent_alias': persistent_alias,
-        'last_updated': datetime.datetime.now().isoformat(),
+        'last_updated': last_updated,
     }
     with info_path.open('w', encoding='utf-8') as info_file:
         json.dump(info, info_file, indent=2)
