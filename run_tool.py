@@ -157,7 +157,10 @@ def ensure_workspace_for_active_org(script_dir: Path, config: ConfigSettings) ->
     if org_workspaces:
         active_workspace = org_workspaces[0]
         save_workspace_info(
-            active_workspace, config.active_org_name, config.persistent_alias
+            active_workspace,
+            config.active_org_name,
+            config.persistent_alias,
+            update_timestamp=False,
         )
         click.echo(
             click.style(
@@ -211,11 +214,21 @@ def select_or_create_workspace(script_dir: Path, org_url: str, config) -> None:
             )
             return
 
-        save_workspace_info(project_path, config.active_org_name, config.persistent_alias)
+        save_workspace_info(
+            project_path,
+            config.active_org_name,
+            config.persistent_alias,
+            update_timestamp=True,
+        )
         print_post_setup_instructions(project_path, launching_tool=False)
         return
 
-    save_workspace_info(project_path, config.active_org_name, config.persistent_alias)
+    save_workspace_info(
+        project_path,
+        config.active_org_name,
+        config.persistent_alias,
+        update_timestamp=False,
+    )
     click.echo("\nWorkspace ready without refreshing metadata.")
     click.echo(f"Using existing project: {project_path}")
 
@@ -256,7 +269,12 @@ def run_security_tool(script_dir: Path, org_url: str, config) -> None:
             questionary.select("Select a workspace to use:", choices=workspace_choices)
         )
 
-    save_workspace_info(project_path, config.active_org_name, config.persistent_alias)
+    save_workspace_info(
+        project_path,
+        config.active_org_name,
+        config.persistent_alias,
+        update_timestamp=False,
+    )
     print_post_setup_instructions(project_path, launching_tool=True)
 
     tool_script_path = script_dir / 'fs_tool_v151.py'
