@@ -18,18 +18,22 @@ from tool_utils import (
     save_workspace_info,
 )
 
-if __name__ == '__main__':
-    click.echo(click.style("=== Step 1: Project Setup and Metadata Download ===", bold=True, fg='cyan'))
+if __name__ == "__main__":
+    click.echo(
+        click.style(
+            "=== Step 1: Project Setup and Metadata Download ===", bold=True, fg="cyan"
+        )
+    )
 
     script_dir = Path(__file__).parent
-    config_path = script_dir / 'config.ini'
-    projects_dir = script_dir / 'projects'
+    config_path = script_dir / "config.ini"
+    projects_dir = script_dir / "projects"
     ensure_config(config_path, projects_dir)
     config = read_config(config_path)
     org_url = config.target_org_url
     persistent_alias = config.persistent_alias
 
-    projects_dir = script_dir / 'projects'
+    projects_dir = script_dir / "projects"
     try:
         project_path, refresh_metadata = choose_project_workspace(
             projects_dir,
@@ -55,13 +59,13 @@ if __name__ == '__main__':
             )
             login_result = run_command(
                 [
-                    'sf',
-                    'org',
-                    'login',
-                    'web',
-                    '--instance-url',
+                    "sf",
+                    "org",
+                    "login",
+                    "web",
+                    "--instance-url",
                     org_url,
-                    '--alias',
+                    "--alias",
                     persistent_alias,
                 ]
             )
