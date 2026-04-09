@@ -303,6 +303,12 @@ def run_security_tool(script_dir: Path, org_url: str, config) -> None:
     click.echo(click.style("Security tool session finished.", bold=True))
 
 
+def start_working(script_dir: Path, org_url: str, config: ConfigSettings) -> None:
+    """Launch the primary happy path for users to begin work quickly."""
+
+    run_security_tool(script_dir, org_url, config)
+
+
 def deploy_changes(script_dir: Path) -> None:
     """Launch deployment workflow when available."""
 
@@ -340,10 +346,10 @@ if __name__ == "__main__":
         if deploy_notice:
             click.echo(deploy_notice)
 
-        menu_choices = ["Select or Create Workspace"]
+        menu_choices = ["Start Working (Recommended)", "Select or Create Workspace"]
         if len(config.available_orgs) > 1:
             menu_choices.append("Switch Active Org")
-        menu_choices.extend(["Run the File Security Tool", "Deploy Changes", "Exit"])
+        menu_choices.extend(["Deploy Changes", "Exit"])
 
         try:
             selection = prompt_with_navigation(
@@ -369,9 +375,9 @@ if __name__ == "__main__":
             click.echo("\nReturning to the main menu...\n")
             continue
 
-        if selection == "Run the File Security Tool":
+        if selection == "Start Working (Recommended)":
             try:
-                run_security_tool(script_dir, config.target_org_url, config)
+                start_working(script_dir, config.target_org_url, config)
             except NavigationInterrupt:
                 click.echo("\nReturning to the main menu...\n")
                 continue
