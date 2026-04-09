@@ -3706,6 +3706,104 @@ def generate_user_field_access_report(meta_base: Path, fs_tool_files_dir: Path):
 
 
 # --- Main CLI ---
+def _run_analysis_menu(meta_base: Path, fs_tool_dir: Path) -> None:
+    """Run read-only analysis actions for reports and audits."""
+
+    while True:
+        analysis_choice = questionary.select(
+            "Analysis actions:",
+            choices=[
+                "Report: Field Security",
+                "Report: Object Permissions",
+                "Report: User Field Access",
+                "Lookup: Field Access",
+                "Audit: Permission Sets (List)",
+                "Audit: Permission Sets (Matrix)",
+                "Back",
+            ],
+            qmark=">",
+            pointer="->",
+        ).ask()
+
+        if analysis_choice in (None, "Back"):
+            return
+
+        if analysis_choice == "Report: Field Security":
+            generate_field_security_report(meta_base, fs_tool_dir)
+        elif analysis_choice == "Report: Object Permissions":
+            generate_object_permissions_report(meta_base, fs_tool_dir)
+        elif analysis_choice == "Report: User Field Access":
+            generate_user_field_access_report(meta_base, fs_tool_dir)
+        elif analysis_choice == "Lookup: Field Access":
+            reverse_lookup_field_access(meta_base, fs_tool_dir)
+        elif analysis_choice == "Audit: Permission Sets (List)":
+            inspect_permission_set_access(meta_base, fs_tool_dir)
+        elif analysis_choice == "Audit: Permission Sets (Matrix)":
+            audit_all_fields_by_selected_permission_sets(meta_base, fs_tool_dir)
+        else:
+            click.echo("Invalid choice. Please try again.")
+
+        click.echo("\n" + "=" * 30 + "\n")
+
+
+def _run_change_access_menu(meta_base: Path, fs_tool_dir: Path, dry_run: bool) -> None:
+    """Run access mutation actions."""
+
+    while True:
+        change_choice = questionary.select(
+            "Change access actions:",
+            choices=[
+                "Change: Field Security",
+                "Change: Object Permissions",
+                "Back",
+            ],
+            qmark=">",
+            pointer="->",
+        ).ask()
+
+        if change_choice in (None, "Back"):
+            return
+
+        if change_choice == "Change: Field Security":
+            bulk_apply_fls(meta_base, fs_tool_dir, dry_run)
+        elif change_choice == "Change: Object Permissions":
+            modify_object_permissions(meta_base, fs_tool_dir, dry_run)
+        else:
+            click.echo("Invalid choice. Please try again.")
+
+        click.echo("\n" + "=" * 30 + "\n")
+
+
+def _run_recovery_menu(meta_base: Path, fs_tool_dir: Path, dry_run: bool) -> None:
+    """Run backup and rollback actions."""
+
+    while True:
+        recovery_choice = questionary.select(
+            "Recovery actions:",
+            choices=[
+                "Recover: Rollback from Backup",
+                "Back",
+            ],
+            qmark=">",
+            pointer="->",
+        ).ask()
+
+        if recovery_choice in (None, "Back"):
+            return
+
+        if recovery_choice == "Recover: Rollback from Backup":
+            if dry_run:
+                click.echo(
+                    click.style("DRY RUN: Rollback operation skipped.", fg="yellow")
+                )
+            else:
+                rollback_changes(meta_base, fs_tool_dir)
+        else:
+            click.echo("Invalid choice. Please try again.")
+
+        click.echo("\n" + "=" * 30 + "\n")
+
+
 @click.command()
 @click.option("--project", default=".", help="SFDX project root path.")
 @click.option(
@@ -3762,54 +3860,30 @@ def main(project, metadata, dry_run):
         )
 
     while True:
-        main_choice = questionary.select(
-            "Choose action:",
+        session_mode = questionary.select(
+            "Select session mode:",
             choices=[
-                "Generate Field Security Report (FLS)",
-                "Modify Field Security",
-                "Generate Object Permissions Report",
-                "Modify Object Permissions",
-                "Generate User Field Access Report",
-                "Who has access to this field? (Reverse Lookup)",
-                "Audit Permission Sets (By Perm Set)",
-                "Audit Permission Sets (By Field)",
-                "Rollback From Backup",
+                "Read-only Analysis (Recommended)",
+                "Change Access",
+                "Recovery",
                 "Exit",
             ],
             qmark=">",
             pointer="->",
         ).ask()
-        click.echo("-" * 20)
 
-        if main_choice == "Generate Field Security Report (FLS)":
-            generate_field_security_report(meta_base, fs_tool_dir)
-        elif main_choice == "Modify Field Security":
-            bulk_apply_fls(meta_base, fs_tool_dir, dry_run)
-        elif main_choice == "Generate Object Permissions Report":
-            generate_object_permissions_report(meta_base, fs_tool_dir)
-        elif main_choice == "Modify Object Permissions":
-            modify_object_permissions(meta_base, fs_tool_dir, dry_run)
-        elif main_choice == "Generate User Field Access Report":
-            generate_user_field_access_report(meta_base, fs_tool_dir)
-        elif main_choice == "Who has access to this field? (Reverse Lookup)":
-            reverse_lookup_field_access(meta_base, fs_tool_dir)
-        elif main_choice == "Audit Permission Sets (By Perm Set)":
-            inspect_permission_set_access(meta_base, fs_tool_dir)
-        elif main_choice == "Audit Permission Sets (By Field)":
-            audit_all_fields_by_selected_permission_sets(meta_base, fs_tool_dir)
-        elif main_choice == "Rollback From Backup":
-            if dry_run:
-                click.echo(
-                    click.style("DRY RUN: Rollback operation skipped.", fg="yellow")
-                )
-            else:
-                rollback_changes(meta_base, fs_tool_dir)
-        elif main_choice == "Exit" or main_choice is None:
+        if session_mode in (None, "Exit"):
             click.echo("Exiting. Goodbye!")
             break
+
+        if session_mode == "Read-only Analysis (Recommended)":
+            _run_analysis_menu(meta_base, fs_tool_dir)
+        elif session_mode == "Change Access":
+            _run_change_access_menu(meta_base, fs_tool_dir, dry_run)
+        elif session_mode == "Recovery":
+            _run_recovery_menu(meta_base, fs_tool_dir, dry_run)
         else:
             click.echo("Invalid choice. Please try again.")
-        click.echo("\n" + "=" * 30 + "\n")
 
 
 if __name__ == "__main__":
