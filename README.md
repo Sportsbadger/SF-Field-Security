@@ -1,72 +1,87 @@
 # SF Field Security Tools
 
-This repository packages a launcher (`run_tool.py`), setup utilities, and the interactive Field Security tool (`fs_tool_v151.py`) used to retrieve Salesforce metadata, inspect access, and apply changes to profiles and permission sets.
+Salesforce metadata retrieval, analysis, and deployment workflow focused on field security and object permissions.
 
-## What's new
-- **Workspace management:** Create, reuse, and refresh named workspaces under `projects/`, with recent workspaces automatically suggested per org.
-- **Multi-org awareness:** Store multiple org definitions in `config.ini`, select an active org from the menu, and keep separate workspaces per alias.
-- **Guided config creator:** First-run setup now builds `config.ini` interactively, including multiple orgs and API version selection.
-- **Root/branch rewrite:** Metadata retrieval now rebuilds the `force-app` branch of each workspace from a clean root each time you refresh.
+This repository provides:
+- A launcher (`run_tool.py`) for org/workspace management and end-to-end flow.
+- A setup utility (`setup_project.py`) for metadata retrieval only.
+- The interactive security tool (`fs_tool_v151.py`) for reports, updates, and rollback.
+- A deploy utility (`deploy_changes.py`) to push generated metadata changes.
+
+---
+
+## What changed in this update
+
+The current toolset now supports:
+- Multi-org configuration in a single `config.ini` with active-org switching.
+- Workspace-per-alias model under `projects/` with recency ordering.
+- Metadata refresh that rebuilds `force-app` from a fresh retrieval/conversion cycle.
+- Guided first-run config creation when config or workspace is missing.
+- Deployment readiness detection from generated `package.xml`.
+- Expanded FS tool actions, including user-centric and reverse-lookup reports.
+
+---
 
 ## Prerequisites
-- **Python 3.10+** with the following libraries installed: `click`, `questionary`, and `lxml`. Install them with `pip install click questionary lxml`.
-- **Salesforce CLI (`sf`)** installed and available on your `PATH`; it is used for authentication, metadata retrieval, and project conversion steps. Download the CLI from [Salesforce's installation page](https://developer.salesforce.com/tools/salesforcecli) and follow the installer or package-manager instructions for your operating system. After installation, ensure the `sf` binary is on your shell `PATH` so the launcher scripts can invoke it:
-  - **macOS/Linux:** if you installed with a package manager (e.g., `brew install sf` or `npm install --global @salesforce/cli`), the binary is typically placed in `/usr/local/bin` or your Node global bin folder. Confirm by running `which sf`; if the command is not found, add the install directory to your `PATH` in `~/.bashrc`, `~/.zshrc`, etc., for example `export PATH="$PATH:/usr/local/bin"`.
-  - **Windows:** the installer adds the CLI to the system `PATH` automatically. If you used a ZIP download, add the folder containing `sf.cmd` to `PATH` via **System Properties → Environment Variables** so that `sf --version` works in a new Command Prompt or PowerShell window.
-  - Verify with `sf --version`; if it prints the CLI version, the tool will be able to authenticate and retrieve metadata.
-- **Access to the target Salesforce org** with browser-based login capability; the tool launches a web login if no active session exists.
 
-## Installation and Setup
-1. Clone this repository and open the project root in your terminal.
-2. Install the Python prerequisites:
-   ```bash
-   pip install click questionary lxml
-   ```
-3. Run the launcher once to create `config.ini` and your initial workspace:
-   ```bash
-   python run_tool.py
-   ```
-   - If `config.ini` or a workspace is missing, the guided config creator launches. You can define multiple orgs, pick which org is active, and set the API version. The tool writes `[Org <name>]` sections under `[SalesforceOrgs]` and remembers the active org.
-   - When refreshing metadata, the launcher rebuilds the workspace’s `force-app` folder from a clean root using a fresh manifest and conversion process.
+- Python **3.10+**
+- Python packages:
+  ```bash
+  pip install click questionary lxml
+  ```
+- Salesforce CLI (`sf`) installed and available in `PATH`
+  - Verify:
+    ```bash
+    sf --version
+    ```
+- Access to the target Salesforce org(s) for web login
 
-## Quick start workflow
-Use the launcher to authenticate, retrieve metadata, and open the interactive security tool in one flow.
+---
 
-1. From the repository root, run:
-   ```bash
-   python run_tool.py
-   ```
-2. Review the active org and workspace shown at the top of the menu.
-3. Choose **Select or Create Workspace** to build or refresh a project. Authentication prompts appear automatically when no active `sf` session exists for the configured alias.
-4. After metadata retrieval, the launcher converts MDAPI output into `force-app` source format and cleans temporary folders, rebuilding the branch from the workspace root.
-5. Select **Run the File Security Tool** to start `fs_tool_v151.py` against the prepared project. When you exit the tool, you can optionally trigger **Deploy Changes**.
+## Repository layout
 
-## Configuration reference
-- If `config.ini` does not exist yet, the launcher creates it automatically during your first run.
-- `config.ini` is organized into multiple `[Org <name>]` sections so you can store sandbox, prod, and other targets. The `[SalesforceOrgs]` section controls which org is active, and `[ToolOptions]` stores the `api_version`.
-- Each `[Org <name>]` entry supports:
-  - `target_org_url` – Login URL for that org.
-  - `persistent_alias` – Salesforce CLI alias reused for authentication and workspace naming.
-  - `explicit_custom_objects` – Comma-separated managed-package objects to include in retrieval (optional).
-- Switch the active org from the launcher menu (**Switch Active Org**). The tool automatically aligns the active workspace to the selected org.
+- `run_tool.py` — Main launcher/menu-driven workflow
+- `setup_project.py` — Retrieval/conversion workflow without launching FS tool
+- `fs_tool_v151.py` — Security analysis and editing CLI
+- `deploy_changes.py` — Deploy changes from latest workspace for active alias
+- `tool_utils.py` — Shared config/auth/workspace/metadata helpers
+- `tests/` — Targeted regression tests
+- `projects/` — Generated workspaces (created at runtime)
+- `config.ini` — Runtime configuration (created at first run)
 
-### Example `config.ini`
-Create your own `config.ini` in the repository root using a structure like this:
+---
 
+## Quick start (recommended)
+
+From repository root:
+
+```bash
+python run_tool.py
 ```
+
+Typical flow:
+1. Complete guided config creation on first run.
+2. Select or create a workspace.
+3. Refresh metadata when prompted (auth is requested automatically if needed).
+4. Run the File Security Tool.
+5. Deploy changes when ready.
+
+---
+
+## Configuration (`config.ini`)
+
+The launcher supports multiple org definitions and one active org.
+
+### Structure
+
+```ini
 [SalesforceOrgs]
 active_org = sandbox
 
 [Org sandbox]
-# The full login URL of your target Salesforce org.
 target_org_url = https://example.sandbox.my.salesforce.com/
-
-# A memorable, persistent alias for this org connection. No spaces or special characters.
 persistent_alias = sandbox
-
-# A comma-separated list of any specific custom objects to include for this org.
-# This is useful for managed package objects that are not retrieved by default with '*'.
-explicit_custom_objects = Custom_Object__c,Custom_Object_2__c
+explicit_custom_objects = Managed_Object__c,Managed_Object_2__c
 
 [Org production]
 target_org_url = https://login.salesforce.com
@@ -74,38 +89,196 @@ persistent_alias = prod
 explicit_custom_objects =
 
 [ToolOptions]
-# The API version to use for the package.xml manifest
 api_version = 60.0
 ```
 
-Add or remove `[Org <name>]` sections as needed and update `active_org` to the one you want to use.
+### Keys
 
-## Workspace management
-- Workspaces live under `projects/` and are filtered per org alias. The launcher suggests the most recently updated workspace, but you can select any existing one or create a new folder (with a timestamp or custom name).
-- When choosing an existing workspace, you can **refresh** (deletes and recreates `force-app` from the retrieved metadata) or **use without refreshing** to preserve current files.
-- Workspace metadata is stored in `.workspace_info.json` so the tool can display the active org, alias, and last refreshed time.
+- `SalesforceOrgs.active_org`: active org name matching one `[Org <name>]` section
+- `Org <name>.target_org_url`: login URL for that org
+- `Org <name>.persistent_alias`: `sf` alias used for auth, retrieval, deployment, and workspace filtering
+- `Org <name>.explicit_custom_objects`: optional comma-separated managed/custom objects to force into retrieval manifest
+- `ToolOptions.api_version`: API version for generated `package.xml`
 
-## FS Tool overview and commands
-`fs_tool_v151.py` is an interactive CLI for analyzing and editing profile/permission set access within the retrieved project. You can pass `--project`, `--metadata`, and `--dry-run` flags when launching it directly.
+Notes:
+- Legacy single-org format is still supported for backward compatibility.
+- If multiple orgs are configured, `active_org` must be set.
 
-Within the menu you can run:
-- **Generate Field Security Report (FLS):** Report field-level access for selected profiles or permission sets.
-- **Modify Field Security (FLS):** Apply read/edit updates manually or from a CSV definition to profiles or permission sets, with backups.
-- **Generate Object Permissions Report:** Matrix view of CRUD/View All/Modify All permissions across chosen objects and profiles/permission sets.
-- **Modify Object Permissions:** Update CRUD/View All/Modify All settings manually or via CSV input.
-- **Who has access to this field? (Reverse Lookup):** Identify which permission sets or profiles grant access to a specific field.
-- **Audit Permission Sets (List Report - FLS, Obj, UserPerms):** Inspect object, field, and user permissions for selected permission sets.
-- **Audit Permission Sets (Matrix Report - FLS focused):** Produce a field-centric matrix of permission-set access.
-- **Rollback From Backup:** Restore profile/permission-set files from backups created by previous runs.
+---
 
-Use `--dry-run` to preview planned bulk changes without writing to disk. Reports and backups are stored in the `FS Tool Files` directory inside the project workspace.
+## Workspace model
 
-## Additional scripts
-- **`setup_project.py`** – Prepares a project folder without launching the interactive tool (useful for automated retrievals). It mirrors the metadata download steps from `run_tool.py` and can be pointed at a specific projects directory with `--projects-dir`.
-- **`deploy_changes.py`** – Deploys updates from a previously prepared workspace. Run it from the repository root to push metadata changes created by the tool.
-- **`tool_utils.py`** – Shared helpers used by the launcher and setup script (authentication checks, manifest generation, workspace metadata, config creation, and CLI command wrappers).
+Workspaces are created under:
 
-## Tips and troubleshooting
-- Confirm the Salesforce CLI is authenticated with the configured alias using `sf org display --target-org <alias>` if retrieval fails.
-- If you use managed packages, populate the `explicit_custom_objects` entry for each org in `config.ini` so their objects are included in that org's package manifest.
-- Keep the CLI version updated (`sf update`) to avoid API incompatibilities when retrieving or deploying metadata.
+```text
+projects/
+```
+
+Behavior:
+- Workspaces are associated to org alias using `.workspace_info.json`.
+- Menus prioritize most recently updated workspace for the active alias.
+- Existing workspace can be used without refresh, or refreshed to rebuild `force-app`.
+- Refresh deletes/recreates `force-app` in that workspace via retrieval + conversion.
+
+---
+
+## Launcher (`run_tool.py`)
+
+Run:
+
+```bash
+python run_tool.py
+```
+
+Main menu options:
+- `Select or Create Workspace`
+- `Switch Active Org` (only shown when 2+ orgs configured)
+- `Run the File Security Tool`
+- `Deploy Changes`
+- `Exit`
+
+Launcher behavior:
+- Displays active org, active workspace, and last refresh timestamp.
+- Detects pending deploy state when `force-app/main/default/package.xml` exists.
+- Uses current active org config for auth/retrieval/deploy.
+
+---
+
+## Setup-only flow (`setup_project.py`)
+
+Use when you want retrieval/conversion only:
+
+```bash
+python setup_project.py
+```
+
+This script:
+- Ensures config exists.
+- Prompts for workspace create/select.
+- Authenticates if needed.
+- Retrieves metadata and converts to source format.
+- Saves workspace metadata.
+
+---
+
+## Field Security Tool (`fs_tool_v151.py`)
+
+Direct invocation:
+
+```bash
+python fs_tool_v151.py --project <workspace_path> [--metadata <relative_path>] [--dry-run]
+```
+
+CLI flags:
+- `--project`: project root path (default `.`)
+- `--metadata`: optional metadata folder override relative to project root
+- `--dry-run`: preview bulk FLS/object updates without modifying files
+
+### Interactive actions
+
+Inside the tool menu:
+- `Generate Field Security Report (FLS)`
+- `Modify Field Security`
+- `Generate Object Permissions Report`
+- `Modify Object Permissions`
+- `Generate User Field Access Report`
+- `Who has access to this field? (Reverse Lookup)`
+- `Audit Permission Sets (By Perm Set)`
+- `Audit Permission Sets (By Field)`
+- `Rollback From Backup`
+- `Exit`
+
+### FLS/object modification capabilities
+
+- Modify Profiles or Permission Sets.
+- Bulk operations via CSV-driven definitions (where prompted).
+- Backup of modified metadata before writes.
+- Auto-generation/update of `package.xml` for modified components.
+- Dry-run mode creates planning artifacts without applying writes.
+
+### Output location
+
+FS tool writes reports/backups under:
+
+```text
+<workspace>/FS Tool Files/
+```
+
+---
+
+## Deployment (`deploy_changes.py`)
+
+Run:
+
+```bash
+python deploy_changes.py
+```
+
+Workflow:
+- Reads active org alias from config.
+- Uses most recent workspace for that alias.
+- Requires generated manifest at:
+  - `<workspace>/force-app/main/default/package.xml`
+- Deploy command:
+  ```bash
+  sf project deploy start --manifest <manifest_path> --target-org <alias>
+  ```
+- On successful deploy, removes the manifest file.
+
+---
+
+## End-to-end workflow examples
+
+### A) Standard interactive run
+
+```bash
+python run_tool.py
+```
+- Create/select workspace
+- Refresh metadata
+- Run FS tool and make changes
+- Deploy from launcher
+
+### B) Scripted-ish split flow
+
+```bash
+python setup_project.py
+python fs_tool_v151.py --project ./projects/<workspace_name>
+python deploy_changes.py
+```
+
+### C) Safe preview run
+
+```bash
+python fs_tool_v151.py --project ./projects/<workspace_name> --dry-run
+```
+
+---
+
+## Troubleshooting
+
+- **Not authenticated**
+  - Validate auth/session:
+    ```bash
+    sf org list --json
+    sf org display --target-org <alias>
+    ```
+- **No workspace for active org**
+  - Run launcher and create/select one under `projects/`.
+- **No `package.xml` found during deploy**
+  - FS tool did not generate deployable changes yet.
+- **Managed-package objects missing**
+  - Add object API names to `explicit_custom_objects` for that org.
+- **CLI/API mismatch issues**
+  - Update CLI:
+    ```bash
+    sf update
+    ```
+
+---
+
+## Notes for contributors
+
+- Keep tooling Python-only with minimal dependencies (`click`, `questionary`, `lxml`).
+- Preserve workspace metadata semantics (`.workspace_info.json`) when changing project selection logic.
+- Preserve manifest-driven deploy flow expected by `deploy_changes.py`.
