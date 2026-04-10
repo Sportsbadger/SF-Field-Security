@@ -78,6 +78,7 @@ if __name__ == "__main__":
             config.api_version,
             config.explicit_custom_objects,
             persistent_alias,
+            org_url,
         ):
             sys.exit(1)
 
