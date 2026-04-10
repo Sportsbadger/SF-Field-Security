@@ -300,6 +300,21 @@ def check_auth(alias: str, announce: bool = True) -> bool:
                 aliases.append(alias_value)
             aliases.extend(org.get("aliases", []))
             if alias in aliases or org.get("username") == alias:
+                session_check = run_command(
+                    ["sf", "org", "display", "--target-org", alias, "--json"],
+                    capture_output=True,
+                    check=False,
+                )
+                if not session_check.success:
+                    if announce:
+                        click.echo(
+                            click.style(
+                                "Stored org entry was found, but the current session is no longer valid. Re-authentication is required.",
+                                fg="yellow",
+                            )
+                        )
+                    return False
+
                 if announce:
                     click.echo(click.style("✓ Found active session.", fg="green"))
                 return True
