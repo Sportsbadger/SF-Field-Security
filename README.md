@@ -263,6 +263,15 @@ python fs_tool_v151.py --project ./projects/<workspace_name> --dry-run
     sf org list --json
     sf org display --target-org <alias>
     ```
+- **`expired access/refresh token` during metadata retrieval**
+  - The local auth entry exists, but the refresh token is no longer valid.
+  - Re-authenticate and retry:
+    ```bash
+    sf org logout --target-org <alias> --no-prompt
+    sf org login web --instance-url <login_url> --alias <alias>
+    sf project retrieve start --target-org <alias> --manifest manifest/package.xml
+    ```
+  - In this toolset, auth checks now validate the session with `sf org display` before retrieval. If the token is expired, the scripts will force a fresh login instead of attempting retrieve with a stale session.
 - **No workspace for active org**
   - Run launcher and create/select one under `projects/`.
 - **No `package.xml` found during deploy**
