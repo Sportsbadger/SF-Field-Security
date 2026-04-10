@@ -15,6 +15,11 @@ import questionary
 
 SF_NAMESPACE_URI = "http://soap.sforce.com/2006/04/metadata"
 WORKSPACE_INFO_FILENAME = ".workspace_info.json"
+EXPIRED_TOKEN_PATTERNS = (
+    "expired access/refresh token",
+    "expired access token",
+    "invalid refresh token",
+)
 
 
 class NavigationInterrupt(Exception):
@@ -300,6 +305,21 @@ def check_auth(alias: str, announce: bool = True) -> bool:
                 aliases.append(alias_value)
             aliases.extend(org.get("aliases", []))
             if alias in aliases or org.get("username") == alias:
+                session_check = run_command(
+                    ["sf", "org", "display", "--target-org", alias, "--json"],
+                    capture_output=True,
+                    check=False,
+                )
+                if not session_check.success:
+                    if announce:
+                        click.echo(
+                            click.style(
+                                "Stored org entry was found, but the current session is no longer valid. Re-authentication is required.",
+                                fg="yellow",
+                            )
+                        )
+                    return False
+
                 if announce:
                     click.echo(click.style("✓ Found active session.", fg="green"))
                 return True
@@ -321,6 +341,16 @@ def check_auth(alias: str, announce: bool = True) -> bool:
             )
         )
     return False
+
+
+def has_expired_token_error(output: str | None) -> bool:
+    """Return True when Salesforce CLI output indicates token expiration."""
+
+    if not output:
+        return False
+
+    normalized = output.lower()
+    return any(pattern in normalized for pattern in EXPIRED_TOKEN_PATTERNS)
 
 
 def read_workspace_info(project_path: Path) -> dict | None:
@@ -618,34 +648,74 @@ def retrieve_and_convert_metadata(
     api_version: str,
     explicit_custom_objects: list[str],
     target_org_alias: str,
+    target_org_url: str | None = None,
 ) -> bool:
     """Download metadata and convert it into source format based on a plan."""
 
     create_sfdx_project_json(plan.project_path, api_version)
     generate_download_manifest(plan.manifest_path, api_version, explicit_custom_objects)
 
-    retrieve_result = run_command(
-        [
-            "sf",
-            "project",
-            "retrieve",
-            "start",
-            "--manifest",
-            str(plan.manifest_path),
-            "--target-org",
-            target_org_alias,
-            "--target-metadata-dir",
-            str(plan.temp_retrieve_dir),
-            "--json",
-        ],
-        capture_output=True,
-        check=False,
-    )
+    retrieve_command = [
+        "sf",
+        "project",
+        "retrieve",
+        "start",
+        "--manifest",
+        str(plan.manifest_path),
+        "--target-org",
+        target_org_alias,
+        "--target-metadata-dir",
+        str(plan.temp_retrieve_dir),
+        "--json",
+    ]
+    retrieve_result = run_command(retrieve_command, capture_output=True, check=False)
     if not retrieve_result.success:
-        click.echo(click.style("Metadata retrieval failed.", fg="red"))
-        if retrieve_result.stdout:
-            click.echo(retrieve_result.stdout)
-        return False
+        if has_expired_token_error(retrieve_result.stdout) and target_org_url:
+            click.echo(
+                click.style(
+                    "Detected expired Salesforce token. Attempting re-authentication and retrying retrieval once.",
+                    fg="yellow",
+                )
+            )
+            run_command(
+                [
+                    "sf",
+                    "org",
+                    "logout",
+                    "--target-org",
+                    target_org_alias,
+                    "--no-prompt",
+                ],
+                capture_output=True,
+                check=False,
+            )
+
+            login_result = run_command(
+                [
+                    "sf",
+                    "org",
+                    "login",
+                    "web",
+                    "--instance-url",
+                    target_org_url,
+                    "--alias",
+                    target_org_alias,
+                ],
+                check=False,
+            )
+            if not login_result.success:
+                click.echo(click.style("Re-authentication failed.", fg="red"))
+                return False
+
+            retrieve_result = run_command(
+                retrieve_command, capture_output=True, check=False
+            )
+
+        if not retrieve_result.success:
+            click.echo(click.style("Metadata retrieval failed.", fg="red"))
+            if retrieve_result.stdout:
+                click.echo(retrieve_result.stdout)
+            return False
 
     zip_path = plan.temp_retrieve_dir / "unpackaged.zip"
     if zip_path.exists():

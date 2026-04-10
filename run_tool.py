@@ -210,6 +210,7 @@ def select_or_create_workspace(script_dir: Path, org_url: str, config) -> None:
             config.api_version,
             config.explicit_custom_objects,
             config.persistent_alias,
+            config.target_org_url,
         ):
             click.echo(
                 click.style(
