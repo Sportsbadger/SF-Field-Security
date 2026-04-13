@@ -573,6 +573,60 @@ def create_config_interactively(
     )
 
 
+def add_org_to_config_interactively(config_path: Path) -> ConfigSettings:
+    """Append a new org section to config.ini and return refreshed settings."""
+
+    parser = configparser.ConfigParser()
+    parser.read(config_path)
+
+    existing_settings = read_config(config_path)
+    existing_names = {org.name for org in existing_settings.available_orgs}
+    existing_aliases = {org.persistent_alias for org in existing_settings.available_orgs}
+
+    click.echo(click.style("\nAdd a new Salesforce org configuration.", fg="cyan"))
+    new_org = _prompt_for_org("org", "https://login.salesforce.com")
+
+    if new_org.name in existing_names:
+        raise click.ClickException(
+            f"An org named '{new_org.name}' already exists. Choose a unique org label."
+        )
+    if new_org.persistent_alias in existing_aliases:
+        raise click.ClickException(
+            f"The alias '{new_org.persistent_alias}' is already in use. Choose a unique alias."
+        )
+
+    section_name = f"Org {new_org.name}"
+    if parser.has_section(section_name):
+        raise click.ClickException(
+            f"Configuration section '{section_name}' already exists."
+        )
+
+    parser.add_section(section_name)
+    parser.set(section_name, "target_org_url", new_org.target_org_url)
+    parser.set(section_name, "persistent_alias", new_org.persistent_alias)
+    parser.set(
+        section_name,
+        "explicit_custom_objects",
+        ",".join(new_org.explicit_custom_objects),
+    )
+
+    if not parser.has_section("SalesforceOrgs"):
+        parser.add_section("SalesforceOrgs")
+    if not parser.get("SalesforceOrgs", "active_org", fallback="").strip():
+        parser.set("SalesforceOrgs", "active_org", existing_settings.active_org_name)
+
+    with config_path.open("w", encoding="utf-8") as config_file:
+        parser.write(config_file)
+
+    click.echo(
+        click.style(
+            f"Added org '{new_org.name}' with alias '{new_org.persistent_alias}'.",
+            fg="green",
+        )
+    )
+    return read_config(config_path)
+
+
 def ensure_config(config_path: Path, projects_dir: Path) -> None:
     """Create config.ini interactively on first run when needed."""
 

@@ -10,6 +10,7 @@ import click
 import questionary
 
 from tool_utils import (
+    add_org_to_config_interactively,
     build_metadata_plan,
     check_auth,
     choose_project_workspace,
@@ -337,6 +338,11 @@ if __name__ == "__main__":
     projects_dir = script_dir / "projects"
     ensure_config(config_path, projects_dir)
     config = read_config(config_path)
+    try:
+        ensure_workspace_for_active_org(script_dir, config)
+    except NavigationInterrupt:
+        click.echo("Workspace setup cancelled. Goodbye!")
+        sys.exit(0)
 
     while True:
         click.echo()
@@ -348,6 +354,7 @@ if __name__ == "__main__":
             click.echo(deploy_notice)
 
         menu_choices = ["Start Working (Recommended)", "Select or Create Workspace"]
+        menu_choices.append("Add Org Configuration")
         if len(config.available_orgs) > 1:
             menu_choices.append("Switch Active Org")
         menu_choices.extend(["Deploy Changes", "Exit"])
@@ -387,6 +394,16 @@ if __name__ == "__main__":
 
         if selection == "Deploy Changes":
             deploy_changes(script_dir)
+            click.echo("\nReturning to the main menu...\n")
+            continue
+
+        if selection == "Add Org Configuration":
+            try:
+                config = add_org_to_config_interactively(config_path)
+            except NavigationInterrupt:
+                click.echo("\nReturning to the main menu...\n")
+                continue
+            ensure_workspace_for_active_org(script_dir, config)
             click.echo("\nReturning to the main menu...\n")
             continue
 
