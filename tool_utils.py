@@ -88,6 +88,8 @@ def run_command(
     cwd: Path = None,
     capture_output: bool = False,
     check: bool = True,
+    status_message: str | None = None,
+    status_interval_seconds: int = 10,
 ) -> CommandResult:
     """Run a shell command with structured logging and status reporting."""
 
@@ -103,26 +105,50 @@ def run_command(
 
     try:
         if capture_output:
-            result = subprocess.run(
+            if status_message:
+                click.echo(click.style(status_message, fg="cyan"))
+            process = subprocess.Popen(
                 command_str,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 shell=True,
-                check=check,
                 cwd=cwd,
             )
+            stdout, stderr = "", ""
+            while process.poll() is None:
+                try:
+                    stdout, stderr = process.communicate(
+                        timeout=status_interval_seconds
+                    )
+                except subprocess.TimeoutExpired:
+                    if status_message:
+                        elapsed = (datetime.datetime.now() - start).total_seconds()
+                        click.echo(
+                            click.style(
+                                f"…still working ({elapsed:.0f}s elapsed)", fg="cyan"
+                            )
+                        )
+                    continue
+
             duration = (datetime.datetime.now() - start).total_seconds()
-            success = result.returncode == 0
+            returncode = process.returncode
+            success = returncode == 0
             if not success:
                 click.echo(
                     click.style(
-                        f"✗ Command returned non-zero exit code {result.returncode}.",
+                        f"✗ Command returned non-zero exit code {returncode}.",
                         fg="red",
                     )
                 )
-            return CommandResult(success, result.returncode, result.stdout, duration)
+                if check:
+                    raise subprocess.CalledProcessError(
+                        returncode, command, output=stdout, stderr=stderr
+                    )
+            merged_output = f"{stdout}{stderr or ''}"
+            return CommandResult(success, returncode, merged_output, duration)
 
         process = subprocess.Popen(
             command_str,
@@ -722,7 +748,12 @@ def retrieve_and_convert_metadata(
         str(plan.temp_retrieve_dir),
         "--json",
     ]
-    retrieve_result = run_command(retrieve_command, capture_output=True, check=False)
+    retrieve_result = run_command(
+        retrieve_command,
+        capture_output=True,
+        check=False,
+        status_message="Retrieving metadata from Salesforce...",
+    )
     if not retrieve_result.success:
         if has_expired_token_error(retrieve_result.stdout) and target_org_url:
             click.echo(
@@ -762,7 +793,10 @@ def retrieve_and_convert_metadata(
                 return False
 
             retrieve_result = run_command(
-                retrieve_command, capture_output=True, check=False
+                retrieve_command,
+                capture_output=True,
+                check=False,
+                status_message="Retrying metadata retrieval after re-authentication...",
             )
 
         if not retrieve_result.success:
@@ -796,6 +830,7 @@ def retrieve_and_convert_metadata(
         cwd=plan.project_path,
         capture_output=True,
         check=False,
+        status_message="Converting retrieved metadata to source format...",
     )
     if not convert_result.success:
         click.echo(click.style("Metadata conversion failed!", fg="red"))
