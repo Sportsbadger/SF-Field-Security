@@ -95,22 +95,52 @@ def _format_active_context(projects_dir: Path, config: ConfigSettings) -> list[s
     return context_lines
 
 
-def _deployment_ready_notice(projects_dir: Path, persistent_alias: str) -> str | None:
-    """Return a message when metadata changes are ready for deployment."""
+def _latest_workspace_manifest_path(
+    projects_dir: Path, persistent_alias: str
+) -> Path | None:
+    """Return manifest path for the latest workspace, if one exists for the org alias."""
 
     workspaces = list_workspaces_for_alias(projects_dir, persistent_alias)
     if not workspaces:
         return None
 
-    manifest_path = workspaces[0] / "force-app" / "main" / "default" / "package.xml"
-    if manifest_path.is_file():
+    return workspaces[0] / "force-app" / "main" / "default" / "package.xml"
+
+
+def _has_pending_deploy(projects_dir: Path, persistent_alias: str) -> bool:
+    """Return whether the latest workspace includes a deploy manifest."""
+
+    manifest_path = _latest_workspace_manifest_path(projects_dir, persistent_alias)
+    return bool(manifest_path and manifest_path.is_file())
+
+
+def _deployment_ready_notice(projects_dir: Path, persistent_alias: str) -> str | None:
+    """Return a message when metadata changes are ready for deployment."""
+
+    if _has_pending_deploy(projects_dir, persistent_alias):
         return click.style(
-            "Metadata changes detected from the last security tool run. Select 'Deploy Changes' to push updates.",
+            "Metadata changes detected from the last security tool run. Select 'Deploy Changes (Pending)' to push updates.",
             fg="green",
             bold=True,
         )
 
     return None
+
+
+def _build_main_menu_choices(
+    config: ConfigSettings, has_pending_deploy: bool
+) -> list[str]:
+    """Build launcher menu choices and highlight pending deployment state."""
+
+    deploy_label = (
+        "Deploy Changes (Pending)" if has_pending_deploy else "Deploy Changes"
+    )
+    menu_choices = ["Start Working (Recommended)", "Select or Create Workspace"]
+    menu_choices.append("Add Org Configuration")
+    if len(config.available_orgs) > 1:
+        menu_choices.append("Switch Active Org")
+    menu_choices.extend([deploy_label, "Exit"])
+    return menu_choices
 
 
 def ensure_authenticated(org_url: str, persistent_alias: str) -> bool:
@@ -348,6 +378,34 @@ def run_security_tool(script_dir: Path, org_url: str, config) -> None:
     click.echo("\n" + "=" * 50)
     click.echo(click.style("Security tool session finished.", bold=True))
 
+    _prompt_deploy_after_tool_run(script_dir, project_path, config)
+
+
+def _prompt_deploy_after_tool_run(
+    script_dir: Path, project_path: Path, config: ConfigSettings
+) -> None:
+    """Offer immediate deployment when the security tool produced deployable changes."""
+
+    manifest_path = project_path / "force-app" / "main" / "default" / "package.xml"
+    if not manifest_path.is_file():
+        return
+
+    save_workspace_info(
+        project_path,
+        config.active_org_name,
+        config.persistent_alias,
+        update_timestamp=True,
+    )
+
+    deploy_now = prompt_with_navigation(
+        questionary.confirm(
+            "Deploy the generated changes now?",
+            default=True,
+        )
+    )
+    if deploy_now:
+        deploy_changes(script_dir)
+
 
 def start_working(script_dir: Path, org_url: str, config: ConfigSettings) -> None:
     """Launch the primary happy path for users to begin work quickly."""
@@ -397,11 +455,10 @@ if __name__ == "__main__":
         if deploy_notice:
             click.echo(deploy_notice)
 
-        menu_choices = ["Start Working (Recommended)", "Select or Create Workspace"]
-        menu_choices.append("Add Org Configuration")
-        if len(config.available_orgs) > 1:
-            menu_choices.append("Switch Active Org")
-        menu_choices.extend(["Deploy Changes", "Exit"])
+        has_pending_deploy = _has_pending_deploy(
+            projects_dir, config.persistent_alias
+        )
+        menu_choices = _build_main_menu_choices(config, has_pending_deploy)
 
         try:
             selection = prompt_with_navigation(
@@ -436,7 +493,7 @@ if __name__ == "__main__":
             click.echo("\nReturning to the main menu...\n")
             continue
 
-        if selection == "Deploy Changes":
+        if selection in {"Deploy Changes", "Deploy Changes (Pending)"}:
             deploy_changes(script_dir)
             click.echo("\nReturning to the main menu...\n")
             continue
