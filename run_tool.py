@@ -28,6 +28,33 @@ from tool_utils import (
 )
 
 
+def _find_workspace_metadata_base(project_path: Path) -> Path | None:
+    """Return the metadata root for a workspace when required folders exist.
+
+    A valid metadata root must contain an ``objects`` directory and either
+    ``profiles`` or ``permissionsets``.
+    """
+
+    default_paths = [
+        project_path / "force-app" / "main" / "default",
+        project_path / "mdapioutput",
+        project_path / "src",
+    ]
+    for candidate in default_paths:
+        if (candidate / "objects").is_dir() and (
+            (candidate / "profiles").is_dir()
+            or (candidate / "permissionsets").is_dir()
+        ):
+            return candidate
+
+    for obj_dir in project_path.rglob("objects"):
+        base = obj_dir.parent
+        if (base / "profiles").is_dir() or (base / "permissionsets").is_dir():
+            return base
+
+    return None
+
+
 def _format_active_context(projects_dir: Path, config: ConfigSettings) -> list[str]:
     """Return formatted lines describing the active org and workspace."""
 
@@ -277,6 +304,23 @@ def run_security_tool(script_dir: Path, org_url: str, config) -> None:
         project_path = prompt_with_navigation(
             questionary.select("Select a workspace to use:", choices=workspace_choices)
         )
+
+    metadata_base = _find_workspace_metadata_base(project_path)
+    if metadata_base is None:
+        click.echo(
+            click.style(
+                "Selected workspace does not contain required metadata directories ('objects' + 'profiles'/'permissionsets').",
+                fg="yellow",
+            )
+        )
+        click.echo(
+            click.style(
+                "Redirecting to workspace selection so you can refresh metadata or choose another workspace.",
+                fg="yellow",
+            )
+        )
+        select_or_create_workspace(script_dir, org_url, config)
+        return
 
     save_workspace_info(
         project_path,
