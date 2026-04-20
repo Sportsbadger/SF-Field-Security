@@ -730,10 +730,89 @@ def retrieve_and_convert_metadata(
     target_org_alias: str,
     target_org_url: str | None = None,
 ) -> bool:
-    """Download metadata and convert it into source format based on a plan."""
+    """Download metadata and convert it into source format based on a plan.
+
+    Fast path:
+        Retrieve directly into source format using ``sf project retrieve start`` with
+        ``--output-dir``.
+    Fallback:
+        If source retrieval is unavailable, fall back to MDAPI zip retrieval and
+        conversion.
+    """
 
     create_sfdx_project_json(plan.project_path, api_version)
     generate_download_manifest(plan.manifest_path, api_version, explicit_custom_objects)
+
+    source_retrieve_command = [
+        "sf",
+        "project",
+        "retrieve",
+        "start",
+        "--manifest",
+        str(plan.manifest_path),
+        "--target-org",
+        target_org_alias,
+        "--output-dir",
+        str(plan.force_app_path),
+        "--json",
+    ]
+    retrieve_result = run_command(
+        source_retrieve_command,
+        capture_output=True,
+        check=False,
+        status_message="Retrieving metadata from Salesforce...",
+    )
+    if (
+        not retrieve_result.success
+        and has_expired_token_error(retrieve_result.stdout)
+        and target_org_url
+    ):
+        click.echo(
+            click.style(
+                "Detected expired Salesforce token. Attempting re-authentication and retrying retrieval once.",
+                fg="yellow",
+            )
+        )
+        run_command(
+            [
+                "sf",
+                "org",
+                "logout",
+                "--target-org",
+                target_org_alias,
+                "--no-prompt",
+            ],
+            capture_output=True,
+            check=False,
+        )
+
+        login_result = run_command(
+            [
+                "sf",
+                "org",
+                "login",
+                "web",
+                "--instance-url",
+                target_org_url,
+                "--alias",
+                target_org_alias,
+            ],
+            check=False,
+        )
+        if not login_result.success:
+            click.echo(click.style("Re-authentication failed.", fg="red"))
+            return False
+
+        retrieve_result = run_command(
+            source_retrieve_command,
+            capture_output=True,
+            check=False,
+            status_message="Retrying metadata retrieval after re-authentication...",
+        )
+
+    if retrieve_result.success:
+        click.echo(click.style("✓ Metadata retrieved in source format.", fg="green"))
+        return True
 
     retrieve_command = [
         "sf",
@@ -748,6 +827,12 @@ def retrieve_and_convert_metadata(
         str(plan.temp_retrieve_dir),
         "--json",
     ]
+    click.echo(
+        click.style(
+            "Direct source retrieval failed; falling back to MDAPI retrieval + conversion.",
+            fg="yellow",
+        )
+    )
     retrieve_result = run_command(
         retrieve_command,
         capture_output=True,
@@ -855,7 +940,7 @@ def create_sfdx_project_json(project_path: Path, api_version: str):
         "sfdcLoginUrl": "https://login.salesforce.com",
         "sourceApiVersion": api_version,
     }
-    with open(project_path / "sfdx-project.json", "w", encoding="utf-8") as f:
+    with (project_path / "sfdx-project.json").open("w", encoding="utf-8") as f:
         json.dump(project_def, f, indent=4)
 
 
