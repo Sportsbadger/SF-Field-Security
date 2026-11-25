@@ -3680,25 +3680,79 @@ def _fetch_org_user_assignments(alias: str, include_inactive: bool) -> list[dict
     )
     assignment_records = _run_soql(
         alias,
-        "SELECT AssigneeId, PermissionSet.Name FROM PermissionSetAssignment "
-        "WHERE PermissionSet.IsOwnedByProfile = false",
+        "SELECT AssigneeId, PermissionSetGroupId, PermissionSet.Name, "
+        "PermissionSet.NamespacePrefix, PermissionSet.Type "
+        "FROM PermissionSetAssignment WHERE PermissionSet.IsOwnedByProfile = false",
     )
+    component_records = _run_soql(
+        alias,
+        "SELECT PermissionSetGroupId, PermissionSetGroup.DeveloperName, "
+        "PermissionSet.Name, PermissionSet.NamespacePrefix "
+        "FROM PermissionSetGroupComponent",
+    )
+
+    # Group id -> (group name, member permission set names)
+    group_names: dict[str, str] = {}
+    group_members: dict[str, set[str]] = defaultdict(set)
+    for rec in component_records:
+        group_id = rec.get("PermissionSetGroupId")
+        group_name = (rec.get("PermissionSetGroup") or {}).get("DeveloperName")
+        member = _permset_metadata_name(rec.get("PermissionSet") or {})
+        if group_id and group_name:
+            group_names[group_id] = group_name
+        if group_id and member:
+            group_members[group_id].add(member)
+
     permsets_by_user: dict[str, set[str]] = defaultdict(set)
+    groups_by_user: dict[str, set[str]] = defaultdict(set)
     for rec in assignment_records:
-        ps_name = (rec.get("PermissionSet") or {}).get("Name")
-        if ps_name:
-            permsets_by_user[rec.get("AssigneeId")].add(ps_name)
-    return [
-        {
-            "id": rec.get("Id"),
-            "username": rec.get("Username"),
-            "name": rec.get("Name"),
-            "active": bool(rec.get("IsActive")),
-            "profile": (rec.get("Profile") or {}).get("Name") or "",
-            "permsets": sorted(permsets_by_user.get(rec.get("Id"), set())),
-        }
-        for rec in user_records
-    ]
+        permset = rec.get("PermissionSet") or {}
+        user_id = rec.get("AssigneeId")
+        if permset.get("Type") == "Group":
+            group_id = rec.get("PermissionSetGroupId")
+            group_names.setdefault(group_id, _permset_metadata_name(permset))
+            groups_by_user[user_id].add(group_id)
+        else:
+            ps_name = _permset_metadata_name(permset)
+            if ps_name:
+                permsets_by_user[user_id].add(ps_name)
+
+    users = []
+    for rec in user_records:
+        user_id = rec.get("Id")
+        user_group_ids = groups_by_user.get(user_id, set())
+        users.append(
+            {
+                "id": user_id,
+                "username": rec.get("Username"),
+                "name": rec.get("Name"),
+                "active": bool(rec.get("IsActive")),
+                "profile": (rec.get("Profile") or {}).get("Name") or "",
+                "permsets": sorted(permsets_by_user.get(user_id, set())),
+                "groups": sorted(group_names[g] for g in user_group_ids),
+                "group_permsets": {
+                    group_names[g]: sorted(group_members.get(g, set()))
+                    for g in user_group_ids
+                },
+            }
+        )
+    return users
+
+
+def _permset_metadata_name(permset: dict) -> str:
+    """Metadata file name of a permission set record (managed ones are prefixed)."""
+    name = permset.get("Name") or ""
+    namespace = permset.get("NamespacePrefix")
+    return f"{namespace}__{name}" if namespace and name else name
+
+
+def _count_muting_permission_sets(alias: str) -> int:
+    """Number of muting permission sets in the org (0 if they can't be queried)."""
+    try:
+        records = _run_soql(alias, "SELECT COUNT(Id) n FROM MutingPermissionSet")
+        return int(records[0].get("n") or 0)
+    except (RuntimeError, IndexError, ValueError, TypeError):
+        return 0
 
 
 def _get_workspace_alias(project_root: Path) -> str | None:
@@ -3754,12 +3808,51 @@ def generate_all_users_field_access_report(meta_base: Path, fs_tool_files_dir: P
         user["profile_file"] = profiles_available.get(wanted)
         if user["profile"] and user["profile_file"] is None:
             unresolved_profiles[user["profile"]] += 1
-        user["permset_files"] = [p for p in user["permsets"] if p in permsets_available]
+        # Effective permission sets = directly assigned + members of assigned groups.
+        effective = set(user["permsets"])
+        via_groups: dict[str, set[str]] = defaultdict(set)
+        for group_name, members in user["group_permsets"].items():
+            for member in members:
+                effective.add(member)
+                via_groups[member].add(group_name)
+        user["permset_files"] = sorted(p for p in effective if p in permsets_available)
+        missing = sorted(p for p in effective if p not in permsets_available)
         user["permset_missing"] = [
-            p for p in user["permsets"] if p not in permsets_available
+            f"{p} [via group {', '.join(sorted(via_groups[p]))}]"
+            if p in via_groups
+            else p
+            for p in missing
         ]
-        for p in user["permset_missing"]:
+        for p in missing:
             unresolved_permsets[p] += 1
+
+    # Label each assigned permission set group and show how well it is covered.
+    group_users: dict[str, int] = defaultdict(int)
+    group_members_all: dict[str, list[str]] = {}
+    for user in users:
+        for group_name, members in user["group_permsets"].items():
+            group_users[group_name] += 1
+            group_members_all[group_name] = members
+    if group_users:
+        click.echo(
+            f"\nExpanded {len(group_users)} permission set group(s) into their members:"
+        )
+        for group_name in sorted(group_users):
+            members = group_members_all[group_name]
+            covered = sum(1 for m in members if m in permsets_available)
+            click.echo(
+                f"  [Group] {group_name}: {group_users[group_name]} user(s), "
+                f"{covered}/{len(members)} member permission set(s) have metadata"
+            )
+    muting_count = _count_muting_permission_sets(alias)
+    if muting_count:
+        click.echo(
+            click.style(
+                f"Warning: this org has {muting_count} muting permission set(s). Muted "
+                "permissions are not applied, so access from groups may be overstated.",
+                fg="yellow",
+            )
+        )
 
     if unresolved_profiles:
         click.echo(
@@ -3772,9 +3865,11 @@ def generate_all_users_field_access_report(meta_base: Path, fs_tool_files_dir: P
     if unresolved_permsets:
         click.echo(
             click.style(
-                f"Warning: {len(unresolved_permsets)} assigned permission set(s) have no "
-                "metadata in this workspace (permission set groups are not covered) and "
-                "are ignored. See the assignments CSV.",
+                f"Warning: {len(unresolved_permsets)} assigned permission set(s) "
+                "(including group members) have no metadata in this workspace and are "
+                "ignored. Managed-package sets are not returned by a wildcard "
+                "retrieval; list them explicitly (e.g. namespace__Name) to include "
+                "them. See the assignments CSV.",
                 fg="yellow",
             )
         )
@@ -3830,6 +3925,7 @@ def generate_all_users_field_access_report(meta_base: Path, fs_tool_files_dir: P
                     "Active",
                     "Profile",
                     "Profile Metadata Found",
+                    "Permission Set Groups",
                     "Permission Sets Used",
                     "Permission Sets Without Metadata",
                 ]
@@ -3842,6 +3938,7 @@ def generate_all_users_field_access_report(meta_base: Path, fs_tool_files_dir: P
                         "Yes" if user["active"] else "No",
                         user["profile"],
                         "Yes" if user["profile_file"] else "No",
+                        "; ".join(user["groups"]),
                         "; ".join(user["permset_files"]),
                         "; ".join(user["permset_missing"]),
                     ]
