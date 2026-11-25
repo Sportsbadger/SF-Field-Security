@@ -688,16 +688,87 @@ def ensure_config(config_path: Path, projects_dir: Path) -> None:
     )
 
 
+def fetch_permission_set_names(target_org_alias: str) -> list[str]:
+    """Return metadata names of every retrievable permission set in the org.
+
+    Installed-package permission sets are returned as ``namespace__Name``. A
+    ``PermissionSet: *`` wildcard does not return those, and when a manifest
+    mixes the wildcard with explicit names the explicit managed names are dropped
+    as well, so the manifest must list every permission set explicitly instead.
+
+    A failed lookup is not fatal: an empty list is returned and the caller falls
+    back to the wildcard retrieval.
+    """
+    result = run_command(
+        [
+            "sf",
+            "data",
+            "query",
+            "--query",
+            "SELECT Name, NamespacePrefix FROM PermissionSet "
+            "WHERE IsOwnedByProfile = false AND Type = 'Regular'",
+            "--target-org",
+            target_org_alias,
+            "--json",
+        ],
+        capture_output=True,
+        check=False,
+        status_message="Looking up permission sets (including managed packages)...",
+    )
+    try:
+        payload = json.loads(result.stdout or "")
+        if not result.success or payload.get("status", 0) != 0:
+            raise ValueError(payload.get("message") or "query failed")
+        records = payload.get("result", {}).get("records", [])
+    except (ValueError, AttributeError) as exc:
+        click.echo(
+            click.style(
+                f"Could not look up permission sets ({exc}); falling back to a "
+                "wildcard retrieval, which omits managed-package permission sets.",
+                fg="yellow",
+            )
+        )
+        return []
+    names = set()
+    managed = 0
+    for rec in records:
+        name = rec.get("Name")
+        if not name:
+            continue
+        namespace = rec.get("NamespacePrefix")
+        if namespace:
+            managed += 1
+            names.add(f"{namespace}__{name}")
+        else:
+            names.add(name)
+    if names:
+        click.echo(
+            f"Retrieving {len(names)} permission set(s) by name "
+            f"({managed} from managed packages)."
+        )
+    return sorted(names)
+
+
 def generate_download_manifest(
-    manifest_path: Path, api_version: str, explicit_objects: list[str]
+    manifest_path: Path,
+    api_version: str,
+    explicit_objects: list[str],
+    explicit_permission_sets: list[str] | None = None,
 ):
     """Create a package.xml manifest for the requested metadata components."""
     package = ET.Element("Package", xmlns=SF_NAMESPACE_URI)
     ET.register_namespace("", SF_NAMESPACE_URI)
-    types = {"Profile": "*", "PermissionSet": "*", "CustomObject": "*"}
+    # Explicit permission set names replace the wildcard: mixing both drops the
+    # explicitly named managed-package permission sets from the retrieval.
+    types = {
+        "Profile": ["*"],
+        "PermissionSet": sorted(set(explicit_permission_sets or [])) or ["*"],
+        "CustomObject": ["*"],
+    }
     for name, members in types.items():
         types_elem = ET.SubElement(package, "types")
-        ET.SubElement(types_elem, "members").text = members
+        for member in members:
+            ET.SubElement(types_elem, "members").text = member
         ET.SubElement(types_elem, "name").text = name
     if explicit_objects:
         types_explicit_objects = ET.SubElement(package, "types")
@@ -741,7 +812,13 @@ def retrieve_and_convert_metadata(
     """
 
     create_sfdx_project_json(plan.project_path, api_version)
-    generate_download_manifest(plan.manifest_path, api_version, explicit_custom_objects)
+    permission_set_names = fetch_permission_set_names(target_org_alias)
+    generate_download_manifest(
+        plan.manifest_path,
+        api_version,
+        explicit_custom_objects,
+        permission_set_names,
+    )
 
     source_retrieve_command = [
         "sf",
