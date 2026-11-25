@@ -49,6 +49,8 @@ import sys
 from collections import defaultdict
 import os
 import subprocess
+import json
+from urllib.parse import unquote
 
 # --- Constants ---
 SF_NAMESPACE_URI = "http://soap.sforce.com/2006/04/metadata"
@@ -3529,7 +3531,357 @@ def generate_object_permissions_report(meta: Path, base_dir: Path):
         )
 
 
+# Standard profiles whose metadata file name differs from the profile name
+# shown in the org (User.Profile.Name).
+PROFILE_API_NAME_OVERRIDES = {
+    "System Administrator": "Admin",
+    "Standard User": "Standard",
+    "Read Only": "ReadOnly",
+    "Marketing User": "MarketingProfile",
+    "Contract Manager": "ContractManager",
+    "Solution Manager": "SolutionManager",
+}
+
+
+class _AccessComponentCache:
+    """Loads each profile / permission set XML once and caches its overrides."""
+
+    def __init__(self, meta_base: Path):
+        self.meta_base = meta_base
+        self._profiles: dict[str, tuple[ET.Element | None, tuple[bool, str | None]]] = {}
+        self._permsets: dict[str, tuple[ET.Element | None, tuple[bool, str | None]]] = {}
+
+    def profile(self, name: str):
+        if name not in self._profiles:
+            root = load_xml(self.meta_base / "profiles" / f"{name}{PROFILE_SUFFIX}")[1]
+            self._profiles[name] = (root, check_for_system_overrides(root, "Profile"))
+        return self._profiles[name]
+
+    def permset(self, name: str):
+        if name not in self._permsets:
+            root = load_xml(
+                self.meta_base / "permissionsets" / f"{name}{PERMISSIONSET_SUFFIX}"
+            )[1]
+            self._permsets[name] = (
+                root,
+                check_for_system_overrides(root, "PermissionSet"),
+            )
+        return self._permsets[name]
+
+
+def _build_field_index(meta_base: Path) -> list[tuple[str, str, str]]:
+    """Return (object, field, field type) for every reportable field."""
+    index = []
+    for obj_name in list_objects(meta_base):
+        for field_name, field_type in list_fields(meta_base, obj_name):
+            index.append((obj_name, field_name, field_type))
+    return index
+
+
+def _compile_field_access(
+    profile_name: str | None,
+    permset_names: list[str],
+    field_index: list[tuple[str, str, str]],
+    cache: _AccessComponentCache,
+) -> list[dict]:
+    """Combine one profile and a list of permission sets into per-field access.
+
+    Returns one dict per entry of field_index, in the same order.
+    """
+    profile_root, profile_override = (
+        cache.profile(profile_name) if profile_name else (None, (False, None))
+    )
+    permsets = [(name, *cache.permset(name)) for name in permset_names]
+
+    results = []
+    for obj_name, field_name, field_type in field_index:
+        full_field_api = f"{obj_name}.{field_name}"
+        readable = False
+        editable = False
+        access_sources = []
+
+        if profile_override[0]:
+            readable = True
+            editable = profile_override[1] == "Modify All Data" or editable
+            access_sources.append(f"Profile: {profile_name} ({profile_override[1]})")
+        elif profile_name and profile_root is not None:
+            r_prof, e_prof = get_field_permissions_from_profile_root(
+                profile_root, full_field_api
+            )
+            readable = readable or r_prof
+            editable = editable or e_prof
+            if r_prof or e_prof:
+                access_sources.append(f"Profile: {profile_name}")
+
+        for ps_name, ps_root, ps_override in permsets:
+            if ps_root is None:
+                continue
+            source_label = None
+            if ps_override[0]:
+                ps_r = True
+                ps_e = ps_override[1] == "Modify All Data"
+                source_label = f"Permission Set: {ps_name} ({ps_override[1]})"
+            else:
+                ps_r, ps_e = get_effective_field_permissions_from_ps_root(
+                    ps_root, obj_name, full_field_api
+                )
+                if ps_r or ps_e:
+                    source_label = f"Permission Set: {ps_name}"
+            readable = readable or ps_r
+            editable = editable or ps_e
+            if source_label and (ps_r or ps_e):
+                access_sources.append(source_label)
+
+        if editable:
+            readable = True
+
+        results.append(
+            {
+                "object": obj_name,
+                "field": field_name,
+                "type": field_type,
+                "readable": readable,
+                "editable": editable,
+                "sources": sorted(set(access_sources)),
+            }
+        )
+    return results
+
+
+def _run_soql(alias: str, soql: str) -> list[dict]:
+    """Run a SOQL query through the Salesforce CLI and return its records."""
+    command = ["sf", "data", "query", "--query", soql, "--target-org", alias, "--json"]
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"Could not run the Salesforce CLI: {exc}") from exc
+    try:
+        payload = json.loads(proc.stdout or "")
+    except json.JSONDecodeError:
+        raise RuntimeError(
+            proc.stderr.strip() or "Unexpected output from 'sf data query'."
+        )
+    if proc.returncode != 0 or payload.get("status", 0) != 0:
+        raise RuntimeError(
+            payload.get("message") or proc.stderr.strip() or "Query failed."
+        )
+    return payload.get("result", {}).get("records", [])
+
+
+def _fetch_org_user_assignments(alias: str, include_inactive: bool) -> list[dict]:
+    """Query users with their profile and assigned permission sets from the org."""
+    where = "UserType = 'Standard'"
+    if not include_inactive:
+        where += " AND IsActive = true"
+    user_records = _run_soql(
+        alias,
+        "SELECT Id, Username, Name, IsActive, Profile.Name FROM User "
+        f"WHERE {where} ORDER BY Username",
+    )
+    assignment_records = _run_soql(
+        alias,
+        "SELECT AssigneeId, PermissionSet.Name FROM PermissionSetAssignment "
+        "WHERE PermissionSet.IsOwnedByProfile = false",
+    )
+    permsets_by_user: dict[str, set[str]] = defaultdict(set)
+    for rec in assignment_records:
+        ps_name = (rec.get("PermissionSet") or {}).get("Name")
+        if ps_name:
+            permsets_by_user[rec.get("AssigneeId")].add(ps_name)
+    return [
+        {
+            "id": rec.get("Id"),
+            "username": rec.get("Username"),
+            "name": rec.get("Name"),
+            "active": bool(rec.get("IsActive")),
+            "profile": (rec.get("Profile") or {}).get("Name") or "",
+            "permsets": sorted(permsets_by_user.get(rec.get("Id"), set())),
+        }
+        for rec in user_records
+    ]
+
+
+def _get_workspace_alias(project_root: Path) -> str | None:
+    info_path = project_root / ".workspace_info.json"
+    try:
+        with open(info_path, encoding="utf-8") as f:
+            return (json.load(f).get("persistent_alias") or "").strip() or None
+    except (OSError, ValueError):
+        return None
+
+
+def generate_all_users_field_access_report(meta_base: Path, fs_tool_files_dir: Path):
+    """Field access for every user in the org, as one matrix (fields x users)."""
+    click.echo("\n--- All Users Field Access Report ---")
+    alias = _get_workspace_alias(fs_tool_files_dir.parent)
+    if alias:
+        click.echo(f"Using org alias from this workspace: {alias}")
+    else:
+        alias = questionary.text(
+            "Salesforce CLI org alias to query for users:"
+        ).ask()
+        if not alias:
+            click.echo("No org alias provided; cancelling report.")
+            return
+        alias = alias.strip()
+
+    include_inactive = questionary.confirm(
+        "Include inactive users?", default=False
+    ).ask()
+    if include_inactive is None:
+        return
+
+    click.echo(f"\nQuerying users and permission set assignments from '{alias}'...")
+    try:
+        users = _fetch_org_user_assignments(alias, include_inactive)
+    except RuntimeError as exc:
+        click.echo(click.style(f"Unable to query the org: {exc}", fg="red"))
+        click.echo(
+            f"If this is an authentication problem, run: sf org login web --alias {alias}"
+        )
+        return
+    if not users:
+        click.echo("No users returned; nothing to report.")
+        return
+    click.echo(f"Found {len(users)} user(s).")
+
+    profiles_available = {unquote(p): p for p in list_profiles(meta_base)}
+    permsets_available = set(list_permission_sets(meta_base))
+    unresolved_profiles: dict[str, int] = defaultdict(int)
+    unresolved_permsets: dict[str, int] = defaultdict(int)
+    for user in users:
+        wanted = PROFILE_API_NAME_OVERRIDES.get(user["profile"], user["profile"])
+        user["profile_file"] = profiles_available.get(wanted)
+        if user["profile"] and user["profile_file"] is None:
+            unresolved_profiles[user["profile"]] += 1
+        user["permset_files"] = [p for p in user["permsets"] if p in permsets_available]
+        user["permset_missing"] = [
+            p for p in user["permsets"] if p not in permsets_available
+        ]
+        for p in user["permset_missing"]:
+            unresolved_permsets[p] += 1
+
+    if unresolved_profiles:
+        click.echo(
+            click.style(
+                "Warning: no profile metadata found for: "
+                + ", ".join(f"{n} ({c} user(s))" for n, c in sorted(unresolved_profiles.items())),
+                fg="yellow",
+            )
+        )
+    if unresolved_permsets:
+        click.echo(
+            click.style(
+                f"Warning: {len(unresolved_permsets)} assigned permission set(s) have no "
+                "metadata in this workspace (permission set groups are not covered) and "
+                "are ignored. See the assignments CSV.",
+                fg="yellow",
+            )
+        )
+
+    click.echo("\nCompiling field access...")
+    cache = _AccessComponentCache(meta_base)
+    field_index = _build_field_index(meta_base)
+    if not field_index:
+        click.echo("No fields found to report.")
+        return
+
+    combo_results: dict[tuple, list[dict]] = {}
+    for user in users:
+        key = (user["profile_file"], tuple(user["permset_files"]))
+        if key not in combo_results:
+            combo_results[key] = _compile_field_access(
+                key[0], list(key[1]), field_index, cache
+            )
+        user["combo_key"] = key
+    click.echo(
+        f"Computed {len(combo_results)} distinct access combination(s) "
+        f"across {len(users)} user(s) and {len(field_index)} field(s)."
+    )
+
+    column_labels: list[str] = []
+    seen_labels: set[str] = set()
+    for user in users:
+        label = user["username"] or user["id"]
+        while label in seen_labels:
+            label += "_"
+        seen_labels.add(label)
+        column_labels.append(label)
+
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    matrix_file = fs_tool_files_dir / f"All_Users_Field_Access_{ts}.csv"
+    assignments_file = fs_tool_files_dir / f"All_Users_Assignments_{ts}.csv"
+    try:
+        with open(matrix_file, "w", newline="", encoding="utf-8") as cf:
+            writer = csv.writer(cf)
+            writer.writerow(["Object Name", "Field Name", "Field Type", *column_labels])
+            for idx, (obj_name, field_name, field_type) in enumerate(field_index):
+                row = [obj_name, field_name, field_type]
+                for user in users:
+                    c = combo_results[user["combo_key"]][idx]
+                    row.append(format_access_display(c["readable"], c["editable"]))
+                writer.writerow(row)
+        with open(assignments_file, "w", newline="", encoding="utf-8") as cf:
+            writer = csv.writer(cf)
+            writer.writerow(
+                [
+                    "Username",
+                    "Name",
+                    "Active",
+                    "Profile",
+                    "Profile Metadata Found",
+                    "Permission Sets Used",
+                    "Permission Sets Without Metadata",
+                ]
+            )
+            for user in users:
+                writer.writerow(
+                    [
+                        user["username"],
+                        user["name"],
+                        "Yes" if user["active"] else "No",
+                        user["profile"],
+                        "Yes" if user["profile_file"] else "No",
+                        "; ".join(user["permset_files"]),
+                        "; ".join(user["permset_missing"]),
+                    ]
+                )
+    except IOError as e:
+        click.echo(
+            click.style(f"Error writing all-users field access report: {e}", fg="red")
+        )
+        return
+
+    click.echo(
+        click.style(
+            f"\nField access matrix generated for {len(users)} user(s) covering "
+            f"{len(field_index)} fields.",
+            bold=True,
+        )
+    )
+    click.echo(f"Matrix saved to: {matrix_file}")
+    click.echo(f"Assignments saved to: {assignments_file}")
+    _offer_to_launch_report(matrix_file)
+
+
 def generate_user_field_access_report(meta_base: Path, fs_tool_files_dir: Path):
+    scope = questionary.select(
+        "User Field Access report scope:",
+        choices=["A single user", "All users (queries the org)"],
+        qmark=">",
+        pointer="->",
+    ).ask()
+    if scope is None:
+        return
+    if scope.startswith("All"):
+        generate_all_users_field_access_report(meta_base, fs_tool_files_dir)
+    else:
+        _generate_single_user_field_access_report(meta_base, fs_tool_files_dir)
+
+
+def _generate_single_user_field_access_report(
+    meta_base: Path, fs_tool_files_dir: Path
+):
     click.echo("\n--- User Field Access Report ---")
     user_name = questionary.text("Enter the user's name or identifier:").ask()
     if not user_name:
@@ -3579,92 +3931,23 @@ def generate_user_field_access_report(meta_base: Path, fs_tool_files_dir: Path):
         click.echo("No profile or permission sets selected; nothing to report.")
         return
 
-    profile_root = None
-    profile_override = (False, None)
-    if profile_choice:
-        profile_root = load_xml(
-            meta_base / "profiles" / f"{profile_choice}{PROFILE_SUFFIX}"
-        )[1]
-        profile_override = check_for_system_overrides(profile_root, "Profile")
-
-    permset_roots: dict[str, ET.Element | None] = {}
-    permset_overrides: dict[str, tuple[bool, str | None]] = {}
-    for ps_name in permset_selection:
-        ps_root = load_xml(
-            meta_base / "permissionsets" / f"{ps_name}{PERMISSIONSET_SUFFIX}"
-        )[1]
-        permset_roots[ps_name] = ps_root
-        permset_overrides[ps_name] = check_for_system_overrides(
-            ps_root, "PermissionSet"
-        )
-
     click.echo("\nCompiling field access...")
-    objects_in_project = list_objects(meta_base)
-    report_rows = []
-    total_fields_processed = 0
-    for obj_name in objects_in_project:
-        fields = list_fields(meta_base, obj_name)
-        for field_name, field_type in fields:
-            full_field_api = f"{obj_name}.{field_name}"
-            readable = False
-            editable = False
-            access_sources = []
-
-            if profile_override[0]:
-                readable = True
-                editable = profile_override[1] == "Modify All Data" or editable
-                access_sources.append(
-                    f"Profile: {profile_choice} ({profile_override[1]})"
-                )
-            elif profile_choice and profile_root is not None:
-                r_prof, e_prof = get_field_permissions_from_profile_root(
-                    profile_root, full_field_api
-                )
-                readable = readable or r_prof
-                editable = editable or e_prof
-                if r_prof or e_prof:
-                    access_sources.append(f"Profile: {profile_choice}")
-
-            for ps_name in permset_selection:
-                ps_root = permset_roots.get(ps_name)
-                if ps_root is None:
-                    continue
-                ps_override = permset_overrides.get(ps_name, (False, None))
-                ps_r = False
-                ps_e = False
-                source_label = None
-                if ps_override[0]:
-                    ps_r = True
-                    ps_e = ps_override[1] == "Modify All Data" or ps_e
-                    source_label = f"Permission Set: {ps_name} ({ps_override[1]})"
-                else:
-                    ps_r, ps_e = get_effective_field_permissions_from_ps_root(
-                        ps_root, obj_name, full_field_api
-                    )
-                    if ps_r or ps_e:
-                        source_label = f"Permission Set: {ps_name}"
-                readable = readable or ps_r
-                editable = editable or ps_e
-                if source_label and (ps_r or ps_e):
-                    access_sources.append(source_label)
-
-            if editable:
-                readable = True
-
-            total_fields_processed += 1
-            access_display = format_access_display(readable, editable)
-            report_rows.append(
-                {
-                    "User": user_name,
-                    "Object Name": obj_name,
-                    "Field Name": field_name,
-                    "Field Type": field_type,
-                    "Access": access_display,
-                    "Access Sources": ", ".join(sorted(set(access_sources)))
-                    if access_sources
-                    else "No access",
-                }
-            )
+    cache = _AccessComponentCache(meta_base)
+    compiled = _compile_field_access(
+        profile_choice, permset_selection, _build_field_index(meta_base), cache
+    )
+    total_fields_processed = len(compiled)
+    report_rows = [
+        {
+            "User": user_name,
+            "Object Name": c["object"],
+            "Field Name": c["field"],
+            "Field Type": c["type"],
+            "Access": format_access_display(c["readable"], c["editable"]),
+            "Access Sources": ", ".join(c["sources"]) if c["sources"] else "No access",
+        }
+        for c in compiled
+    ]
 
     if not report_rows:
         click.echo("No fields found to report.")
