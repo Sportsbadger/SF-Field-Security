@@ -1,5 +1,6 @@
 import sys
 import types
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +13,8 @@ from tool_utils import (
     CommandResult,
     MetadataRetrievalPlan,
     check_auth,
+    fetch_permission_set_names,
+    generate_download_manifest,
     has_expired_token_error,
     retrieve_and_convert_metadata,
 )
@@ -80,6 +83,7 @@ def test_retrieve_reauthenticates_and_retries_once(monkeypatch, tmp_path):
     (plan.temp_retrieve_dir / "unpackaged.zip").write_bytes(b"PK\x05\x06" + b"\x00" * 18)
 
     responses = [
+        _command_result(True, '{"status":0,"result":{"records":[]}}'),
         _command_result(False, '{"message":"expired access/refresh token"}'),
         _command_result(True, ""),
         _command_result(True, ""),
@@ -99,3 +103,58 @@ def test_retrieve_reauthenticates_and_retries_once(monkeypatch, tmp_path):
         target_org_alias="sandbox",
         target_org_url="https://login.salesforce.com",
     )
+
+
+def test_fetch_permission_set_names_adds_namespace(monkeypatch):
+    output = (
+        '{"status":0,"result":{"records":['
+        '{"Name":"Trackers","NamespacePrefix":"sitetracker"},'
+        '{"Name":"Trackers","NamespacePrefix":"sitetracker"},'
+        '{"Name":"Plain","NamespacePrefix":null}]}}'
+    )
+    monkeypatch.setattr(
+        "tool_utils.run_command", lambda *_a, **_k: _command_result(True, output)
+    )
+    assert fetch_permission_set_names("sandbox") == ["Plain", "sitetracker__Trackers"]
+
+
+def test_fetch_permission_set_names_failure_is_not_fatal(monkeypatch):
+    monkeypatch.setattr(
+        "tool_utils.run_command",
+        lambda *_a, **_k: _command_result(False, '{"message":"expired"}'),
+    )
+    assert fetch_permission_set_names("sandbox") == []
+    monkeypatch.setattr(
+        "tool_utils.run_command", lambda *_a, **_k: _command_result(False, "")
+    )
+    assert fetch_permission_set_names("sandbox") == []
+
+
+def test_manifest_lists_permission_sets_explicitly_without_wildcard(tmp_path):
+    manifest = tmp_path / "package.xml"
+    generate_download_manifest(
+        manifest, "65.0", [], ["sitetracker__Trackers", "Plain"]
+    )
+    root = ET.parse(manifest).getroot()
+    ns = {"m": "http://soap.sforce.com/2006/04/metadata"}
+    permset_members = [
+        m.text
+        for t in root.findall("m:types", ns)
+        if t.findtext("m:name", namespaces=ns) == "PermissionSet"
+        for m in t.findall("m:members", ns)
+    ]
+    assert permset_members == ["Plain", "sitetracker__Trackers"]
+
+
+def test_manifest_falls_back_to_permission_set_wildcard(tmp_path):
+    manifest = tmp_path / "package.xml"
+    generate_download_manifest(manifest, "65.0", [], [])
+    root = ET.parse(manifest).getroot()
+    ns = {"m": "http://soap.sforce.com/2006/04/metadata"}
+    permset_members = [
+        m.text
+        for t in root.findall("m:types", ns)
+        if t.findtext("m:name", namespaces=ns) == "PermissionSet"
+        for m in t.findall("m:members", ns)
+    ]
+    assert permset_members == ["*"]

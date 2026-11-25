@@ -278,6 +278,8 @@ python fs_tool_v151.py --project ./projects/<workspace_name> --dry-run
   - FS tool did not generate deployable changes yet.
 - **Managed-package objects missing**
   - Add object API names to `explicit_custom_objects` for that org.
+- **Managed-package permission sets missing from reports**
+  - Metadata refresh looks up every permission set in the org (including installed-package ones, as `namespace__Name`) and lists them explicitly in `package.xml`, because the `PermissionSet: *` wildcard does not return managed-package sets. If that lookup fails it falls back to the wildcard. Refresh the workspace to pick them up.
 - **CLI/API mismatch issues**
   - Update CLI:
     ```bash
