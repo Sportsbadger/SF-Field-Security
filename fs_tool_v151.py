@@ -132,11 +132,16 @@ def _list_metadata_components(
     return sorted(p.name[: -len(suffix)] for p in comp_path.glob(f"*{suffix}"))
 
 
+def _ci_key(name: str) -> tuple[str, str]:
+    """Case-insensitive sort key (ties are broken by the original spelling)."""
+    return (name.lower(), name)
+
+
 def list_objects(meta: Path) -> list[str]:
     obj_path = meta / "objects"
     if not obj_path.is_dir():
         return []
-    return sorted(d.name for d in obj_path.iterdir() if d.is_dir())
+    return sorted((d.name for d in obj_path.iterdir() if d.is_dir()), key=_ci_key)
 
 
 def list_fields(meta: Path, obj: str) -> list[tuple[str, str]]:
@@ -842,7 +847,7 @@ def _get_manual_field_definitions(
         click.echo(
             f"--- Define Custom FLS Permissions (will apply to all selected {manual_target_type}) ---"
         )
-        for ffn in sorted(all_selected_full_field_names):
+        for ffn in sorted(all_selected_full_field_names, key=_ci_key):
             is_formula = field_type_map.get(ffn) == "Formula"
 
             # Offer different choices for formula fields
@@ -969,7 +974,7 @@ def _get_csv_field_definitions(
                             e_csv,
                         )
                         parsed_perm_count += 1
-        all_selected_full_field_names = sorted(list(temp_fields_from_csv))
+        all_selected_full_field_names = sorted(temp_fields_from_csv, key=_ci_key)
         if not all_selected_full_field_names:
             click.echo(
                 "No valid ObjectName.FieldName combinations found in the CSV file."
@@ -1166,7 +1171,7 @@ def _prepare_and_display_planned_fls_changes(
             if target_item_name in field_new_perms.get(ffn, {})
         ]
 
-        for ffn in sorted(fields_to_check_for_this_target):
+        for ffn in sorted(fields_to_check_for_this_target, key=_ci_key):
             current_r, current_e = (False, False)
             if target_specific_root:
                 current_r, current_e = get_perms_for_target_func(
@@ -1633,7 +1638,7 @@ def _get_manual_object_permission_definitions(
         for obj_name in selected_objects_for_perm_change:
             object_permission_template_map[obj_name] = perms_to_set.copy()
     else:
-        for obj_name in sorted(selected_objects_for_perm_change):
+        for obj_name in sorted(selected_objects_for_perm_change, key=_ci_key):
             click.echo(
                 f"\nDefining permissions for object: {click.style(obj_name, bold=True)}"
             )
@@ -1808,7 +1813,7 @@ def _get_manual_object_permission_definitions(
         for obj_name in selected_objects_for_perm_change:
             object_permission_template_map[obj_name] = perms_to_set.copy()
     else:
-        for obj_name in sorted(selected_objects_for_perm_change):
+        for obj_name in sorted(selected_objects_for_perm_change, key=_ci_key):
             click.echo(
                 f"\nDefining permissions for object: {click.style(obj_name, bold=True)}"
             )
@@ -2019,7 +2024,7 @@ def _prepare_and_display_planned_object_permission_changes(
             if target_name in object_new_perms_definitions.get(obj, {})
         ]
 
-        for obj_name in sorted(objects_to_check_for_this_target):
+        for obj_name in sorted(objects_to_check_for_this_target, key=_ci_key):
             current_perms = get_object_permissions_from_xml_root(
                 target_specific_root, obj_name
             )
@@ -2564,7 +2569,7 @@ def generate_field_security_report(meta: Path, base_dir: Path):
             writer = csv.writer(cf)
             writer.writerow(header)
 
-            for obj_name in sorted(field_selection_map.keys()):
+            for obj_name in sorted(field_selection_map, key=_ci_key):
                 fields_for_report = sorted(field_selection_map[obj_name])
                 if not fields_for_report:
                     continue
@@ -2774,7 +2779,9 @@ def inspect_permission_set_access(meta_base: Path, fs_tool_files_dir: Path):
                 click.echo(
                     f"    {'-' * (object_column_width - 1)} {' '.join(['-' * len(s) for s in example_true_perms_header.split()])}"
                 )
-                for obj, perms in sorted(data["objects"].items()):
+                for obj, perms in sorted(
+                    data["objects"].items(), key=lambda kv: _ci_key(kv[0])
+                ):
                     click.echo(
                         f"    {obj:<{object_column_width}} {format_object_perms_display(perms)}"
                     )
@@ -2783,14 +2790,18 @@ def inspect_permission_set_access(meta_base: Path, fs_tool_files_dir: Path):
             if data["fields"]:
                 click.echo(click.style("\n  Field Permissions:", underline=True))
                 fields_by_object = defaultdict(list)
-                for field_full_name, perms_f in sorted(data["fields"].items()):
+                for field_full_name, perms_f in sorted(
+                    data["fields"].items(), key=lambda kv: _ci_key(kv[0])
+                ):
                     obj_name, field_name_only = (
                         field_full_name.split(".", 1)
                         if "." in field_full_name
                         else ("_UNKNOWN_OBJECT_?", field_full_name)
                     )
                     fields_by_object[obj_name].append((field_name_only, perms_f))
-                for obj_name, field_list in sorted(fields_by_object.items()):
+                for obj_name, field_list in sorted(
+                    fields_by_object.items(), key=lambda kv: _ci_key(kv[0])
+                ):
                     click.echo(f"    Object: {click.style(obj_name, bold=True)}")
                     field_header = (
                         f"      {'Field':<{field_column_width}} {'Access':<8}"
@@ -2960,7 +2971,7 @@ def audit_all_fields_by_selected_permission_sets(meta: Path, base_dir: Path):
     if not fields_to_include_in_report:
         click.echo("No fields found accessible by selected permission sets.")
         return
-    fields_to_include_in_report.sort()
+    fields_to_include_in_report.sort(key=_ci_key)
     click.echo(
         f"\nFound {len(fields_to_include_in_report)} fields accessible by at least one selected PS."
     )
@@ -3345,7 +3356,9 @@ def reverse_lookup_field_access(meta: Path, base_dir: Path):
     if not console_output_data:
         click.echo("No access found for the selected field(s).")
     else:
-        for full_field_name, access_list in sorted(console_output_data.items()):
+        for full_field_name, access_list in sorted(
+            console_output_data.items(), key=lambda kv: _ci_key(kv[0])
+        ):
             click.echo(
                 f"\nField: {click.style(full_field_name, fg='cyan', bold=True)} (Type: {field_type_cache.get(full_field_name, 'Unknown')})"
             )
@@ -3379,7 +3392,7 @@ def reverse_lookup_field_access(meta: Path, base_dir: Path):
                 sorted(
                     report_data,
                     key=lambda x: (
-                        x["Object Name"],
+                        _ci_key(x["Object Name"]),
                         x["Field Name"],
                         x["Component Type"],
                         x["Component Name"],
@@ -3410,7 +3423,9 @@ def generate_object_permissions_report(meta: Path, base_dir: Path):
     objects_for_report = (
         all_objs_list
         if ALL_CHOICE_VALUE in selected_objects_q
-        else sorted([o for o in selected_objects_q if o != ALL_CHOICE_VALUE])
+        else sorted(
+            [o for o in selected_objects_q if o != ALL_CHOICE_VALUE], key=_ci_key
+        )
     )
     if not objects_for_report:
         click.echo("No objects effectively selected for the report.")
@@ -4069,7 +4084,10 @@ def _generate_single_user_field_access_report(
             )
             writer.writeheader()
             writer.writerows(
-                sorted(report_rows, key=lambda r: (r["Object Name"], r["Field Name"]))
+                sorted(
+                    report_rows,
+                    key=lambda r: (_ci_key(r["Object Name"]), r["Field Name"]),
+                )
             )
         click.echo(
             click.style(
