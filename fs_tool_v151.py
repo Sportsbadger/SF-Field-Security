@@ -38,19 +38,20 @@ FS Tool Files Directory:
 
 """
 
-import shutil
-import datetime
 import csv
-from pathlib import Path
+import datetime
+import json
+import os
+import shutil
+import subprocess
+import sys
 import xml.etree.ElementTree as ET
+from collections import defaultdict
+from pathlib import Path
+from urllib.parse import unquote
+
 import click
 import questionary
-import sys
-from collections import defaultdict
-import os
-import subprocess
-import json
-from urllib.parse import unquote
 
 # --- Constants ---
 SF_NAMESPACE_URI = "http://soap.sforce.com/2006/04/metadata"
@@ -640,10 +641,7 @@ def format_access_display(readable: bool, editable: bool) -> str:
 def format_object_perms_display(perms: dict[str, bool]) -> str:
     """Formats object permissions dictionary into a 'c r u d VA MA' string."""
     display_parts = []
-    for i in range(len(OBJECT_PERM_TAGS)):
-        tag_name = OBJECT_PERM_TAGS[i]
-        short_char = OBJECT_PERM_SHORT[i]
-
+    for tag_name, short_char in zip(OBJECT_PERM_TAGS, OBJECT_PERM_SHORT):
         permission_is_granted = perms.get(
             tag_name, False
         )  # Default to False if key is missing
@@ -1160,7 +1158,6 @@ def _prepare_and_display_planned_fls_changes(
             else get_field_permissions_from_permissionset_root
         )
         changes_for_this_target_display = []
-        has_changes_for_this_item = False
         hdr_line_display = (
             f"{'Object.Field':<{field_col_width}}{'Current FLS':<16}{'New FLS':<12}"
         )
@@ -1195,7 +1192,6 @@ def _prepare_and_display_planned_fls_changes(
                     }
                 )
                 any_changes_planned_overall = True
-                has_changes_for_this_item = True
 
         if changes_for_this_target_display:
             click.echo(
@@ -1502,183 +1498,6 @@ def bulk_apply_fls(meta: Path, base_dir: Path, dry_run: bool):
 
 
 # --- Object Permission Modification Specific Helpers ---
-
-
-def _get_manual_object_permission_definitions(
-    meta: Path,
-) -> tuple[set[str], set[str], set[str], defaultdict]:
-    definitions = defaultdict(lambda: defaultdict(dict))
-    profiles_selected = set()
-    permsets_selected = set()
-    all_selected_objects_set = set()
-
-    target_type_choice = questionary.select(
-        "Modify object permissions for:", choices=["Profiles", "Permission Sets"]
-    ).ask()
-    if not target_type_choice:
-        return set(), set(), set(), definitions
-
-    list_func = (
-        list_profiles if target_type_choice == "Profiles" else list_permission_sets
-    )
-    all_available_items = list_func(meta)
-    if not all_available_items:
-        click.echo(f"No {target_type_choice.lower()} found in your project.")
-        return set(), set(), set(), definitions
-
-    item_choices = [
-        questionary.Choice(
-            f"[ALL {target_type_choice.upper()}]", value=ALL_CHOICE_VALUE
-        )
-    ] + [
-        q_choice(i) for i in all_available_items for q_choice in [questionary.Choice]
-    ]  # Python 3.8+
-    selected_items_q = questionary.checkbox(
-        f"Select {target_type_choice} to modify permissions for:", choices=item_choices
-    ).ask()
-    if not selected_items_q:
-        click.echo(f"No {target_type_choice.lower()} selected.")
-        return set(), set(), set(), definitions
-    targets_to_modify_names = (
-        all_available_items
-        if ALL_CHOICE_VALUE in selected_items_q
-        else [i for i in selected_items_q if i != ALL_CHOICE_VALUE]
-    )
-    if not targets_to_modify_names:
-        click.echo(f"No {target_type_choice.lower()} effectively selected.")
-        return set(), set(), set(), definitions
-
-    if target_type_choice == "Profiles":
-        profiles_selected.update(targets_to_modify_names)
-    else:
-        permsets_selected.update(targets_to_modify_names)
-
-    all_project_objects = list_objects(meta)
-    if not all_project_objects:
-        click.echo("No objects found in project.")
-        return set(), set(), set(), definitions
-    selected_objects_for_perm_change = questionary.checkbox(
-        "Select objects to define permissions for:", choices=all_project_objects
-    ).ask()
-    if not selected_objects_for_perm_change:
-        click.echo("No objects selected.")
-        return set(), set(), set(), definitions
-    all_selected_objects_set.update(selected_objects_for_perm_change)
-
-    click.echo(
-        f"\n--- Define Object Permissions for {len(selected_objects_for_perm_change)} object(s) ---"
-    )
-    click.echo(
-        f"(These will be applied to all {len(targets_to_modify_names)} selected {target_type_choice.lower()})"
-    )
-
-    perm_template_choice = questionary.select(
-        "Permission template for ALL selected objects:",
-        choices=[
-            "No Access",
-            "Read Only",
-            "Read/Create",
-            "Read/Edit",
-            "Full CRUD",
-            "Full Control",
-            "Custom (per object)",
-        ],
-    ).ask()
-    if not perm_template_choice:
-        click.echo("Cancelled.")
-        return set(), set(), set(), definitions
-
-    base_object_perms_templates = {
-        "No Access": {tag: False for tag in OBJECT_PERM_TAGS},
-        "Read Only": {
-            "allowCreate": False,
-            "allowRead": True,
-            "allowEdit": False,
-            "allowDelete": False,
-            "viewAllRecords": True,
-            "modifyAllRecords": False,
-        },
-        "Read/Create": {
-            "allowCreate": True,
-            "allowRead": True,
-            "allowEdit": False,
-            "allowDelete": False,
-            "viewAllRecords": True,
-            "modifyAllRecords": False,
-        },
-        "Read/Edit": {
-            "allowCreate": False,
-            "allowRead": True,
-            "allowEdit": True,
-            "allowDelete": False,
-            "viewAllRecords": True,
-            "modifyAllRecords": False,
-        },
-        "Full CRUD": {
-            "allowCreate": True,
-            "allowRead": True,
-            "allowEdit": True,
-            "allowDelete": True,
-            "viewAllRecords": True,
-            "modifyAllRecords": False,
-        },
-        "Full Control": {
-            "allowCreate": True,
-            "allowRead": True,
-            "allowEdit": True,
-            "allowDelete": True,
-            "viewAllRecords": True,
-            "modifyAllRecords": True,
-        },
-    }
-
-    object_permission_template_map = {}
-    if perm_template_choice != "Custom (per object)":
-        perms_to_set = base_object_perms_templates[perm_template_choice]
-        for obj_name in selected_objects_for_perm_change:
-            object_permission_template_map[obj_name] = perms_to_set.copy()
-    else:
-        for obj_name in sorted(selected_objects_for_perm_change, key=_ci_key):
-            click.echo(
-                f"\nDefining permissions for object: {click.style(obj_name, bold=True)}"
-            )
-            custom_perms = {tag: False for tag in OBJECT_PERM_TAGS}
-            if questionary.confirm("  Allow Create (c)?", default=False).ask():
-                custom_perms["allowCreate"] = True
-            if questionary.confirm(
-                "  Allow Read (r)?", default=custom_perms["allowCreate"]
-            ).ask():
-                custom_perms["allowRead"] = True
-            if questionary.confirm("  Allow Edit (u)?", default=False).ask():
-                custom_perms["allowEdit"] = True
-            if questionary.confirm("  Allow Delete (d)?", default=False).ask():
-                custom_perms["allowDelete"] = True
-            if questionary.confirm(
-                "  View All Records (VA)?", default=custom_perms["allowRead"]
-            ).ask():
-                custom_perms["viewAllRecords"] = True
-            if questionary.confirm("  Modify All Records (MA)?", default=False).ask():
-                custom_perms["modifyAllRecords"] = True
-            if custom_perms["modifyAllRecords"]:
-                custom_perms["viewAllRecords"] = True
-                custom_perms["allowRead"] = True
-            if custom_perms["viewAllRecords"]:
-                custom_perms["allowRead"] = True
-            if custom_perms["allowEdit"] or custom_perms["allowDelete"]:
-                custom_perms["allowRead"] = True
-            object_permission_template_map[obj_name] = custom_perms
-            click.echo(
-                f"  Permissions for {obj_name}: {format_object_perms_display(custom_perms)}"
-            )
-
-    for obj_name in all_selected_objects_set:
-        perms_for_this_object = object_permission_template_map.get(obj_name, {})
-        for target_name in targets_to_modify_names:
-            definitions[obj_name][target_name] = perms_for_this_object.copy()
-    return all_selected_objects_set, profiles_selected, permsets_selected, definitions
-
-
-# --- Object Permission Modification Specific Helpers ---
 def _get_manual_object_permission_definitions(
     meta: Path,
 ) -> tuple[set[str], set[str], set[str], defaultdict]:
@@ -1693,6 +1512,18 @@ def _get_manual_object_permission_definitions(
     ).ask()
     if not target_type_choice:
         return set(), set(), set(), definitions
+
+    all_project_objects = list_objects(meta)
+    if not all_project_objects:
+        click.echo("No objects found in project.")
+        return set(), set(), set(), definitions
+    selected_objects_for_perm_change = questionary.checkbox(
+        "Select objects to define permissions for:", choices=all_project_objects
+    ).ask()
+    if not selected_objects_for_perm_change:
+        click.echo("No objects selected.")
+        return set(), set(), set(), definitions
+    all_selected_objects_set.update(selected_objects_for_perm_change)
 
     list_func = (
         list_profiles if target_type_choice == "Profiles" else list_permission_sets
@@ -1727,18 +1558,6 @@ def _get_manual_object_permission_definitions(
         profiles_selected.update(targets_to_modify_names)
     else:
         permsets_selected.update(targets_to_modify_names)
-
-    all_project_objects = list_objects(meta)
-    if not all_project_objects:
-        click.echo("No objects found in project.")
-        return set(), set(), set(), definitions
-    selected_objects_for_perm_change = questionary.checkbox(
-        "Select objects to define permissions for:", choices=all_project_objects
-    ).ask()
-    if not selected_objects_for_perm_change:
-        click.echo("No objects selected.")
-        return set(), set(), set(), definitions
-    all_selected_objects_set.update(selected_objects_for_perm_change)
 
     click.echo(
         f"\n--- Define Object Permissions for {len(selected_objects_for_perm_change)} object(s) ---"
@@ -2155,7 +1974,7 @@ def _apply_bulk_object_permission_modifications_to_files(
         target_item_name,
         changed_objects_for_item,
     ) in items_with_obj_perm_changes_map.items():
-        cached_root, item_type_str = item_xml_cache.get(target_item_name)
+        _, item_type_str = item_xml_cache.get(target_item_name)
 
         item_path_part = "profiles" if item_type_str == "Profile" else "permissionsets"
         item_suffix = (
@@ -2374,7 +2193,7 @@ def _offer_to_launch_report(report_path: Path):
         if sys.platform.startswith("darwin"):
             subprocess.run(["open", str(report_path)], check=False)
         elif os.name == "nt":
-            os.startfile(report_path)  # type: ignore[attr-defined]
+            os.startfile(report_path)  # pylint: disable=no-member
         else:
             subprocess.run(["xdg-open", str(report_path)], check=False)
     except Exception as exc:
@@ -2580,9 +2399,9 @@ def generate_field_security_report(meta: Path, base_dir: Path):
                         f"Processing object: {obj_name} ({len(fields_for_report)} fields selected for this object)"
                     )
 
-                field_type_map_for_obj = {
-                    fname: ftype for fname, ftype in list_fields(meta, obj_name)
-                }  # Get types once per object
+                field_type_map_for_obj = dict(
+                    list_fields(meta, obj_name)
+                )  # Get types once per object
                 for f_name in fields_for_report:
                     full_field_name = f"{obj_name}.{f_name}"
                     field_type = field_type_map_for_obj.get(f_name, "Unknown")
@@ -2636,8 +2455,7 @@ def generate_field_security_report(meta: Path, base_dir: Path):
                             f"Warning: Could not remove empty report file {output_filename}",
                             fg="yellow",
                         )
-                    )
-                    pass  # Continue if deletion fails
+                    )  # Continue if deletion fails
 
     except IOError as e:
         click.echo(click.style(f"\nError generating report: {e}", fg="red"))
@@ -3485,9 +3303,6 @@ def generate_object_permissions_report(meta: Path, base_dir: Path):
         max((max(len(t) for t in all_targets_sorted) if all_targets_sorted else 0), 20)
         + 2
     )
-    perms_display_width = (
-        len(format_object_perms_display({tag: True for tag in OBJECT_PERM_TAGS})) + 2
-    )
     header_console = f"{'Object Name':<{max_obj_name_len + 2}}" + "".join(
         [f"{target_name:<{target_col_width}}" for target_name in all_targets_sorted]
     )
@@ -3667,15 +3482,17 @@ def _run_soql(alias: str, soql: str) -> list[dict]:
     """Run a SOQL query through the Salesforce CLI and return its records."""
     command = ["sf", "data", "query", "--query", soql, "--target-org", alias, "--json"]
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=600)
+        proc = subprocess.run(
+            command, capture_output=True, text=True, timeout=600, check=False
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(f"Could not run the Salesforce CLI: {exc}") from exc
     try:
         payload = json.loads(proc.stdout or "")
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
         raise RuntimeError(
             proc.stderr.strip() or "Unexpected output from 'sf data query'."
-        )
+        ) from exc
     if proc.returncode != 0 or payload.get("status", 0) != 0:
         raise RuntimeError(
             payload.get("message") or proc.stderr.strip() or "Query failed."
@@ -4285,4 +4102,4 @@ def main(project, metadata, dry_run):
 
 
 if __name__ == "__main__":
-    main()
+    main()  # pylint: disable=no-value-for-parameter
