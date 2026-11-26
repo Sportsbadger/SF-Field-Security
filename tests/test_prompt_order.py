@@ -6,20 +6,14 @@ sys.modules.setdefault("questionary", types.SimpleNamespace())
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 import fs_tool_v151 as fs
-
-
-class _Answer:
-    def __init__(self, value):
-        self.value = value
-
-    def ask(self):
-        return self.value
+from fs_tool_v151 import _get_manual_object_permission_definitions
 
 
 def _fake_questionary(answers, asked):
-    def prompt(message, *args, **kwargs):
+    def prompt(message, *_args, **_kwargs):
         asked.append(message)
-        return _Answer(answers.pop(0))
+        answer = answers.pop(0)
+        return types.SimpleNamespace(ask=lambda: answer)
 
     return types.SimpleNamespace(
         select=prompt,
@@ -45,9 +39,7 @@ def test_modify_object_permissions_asks_objects_before_profiles(monkeypatch, tmp
     ]
     monkeypatch.setattr(fs, "questionary", _fake_questionary(answers, asked))
 
-    objects, profiles, permsets, definitions = fs._get_manual_object_permission_definitions(
-        tmp_path
-    )
+    objects, profiles, permsets, definitions = _get_manual_object_permission_definitions(tmp_path)
 
     assert asked[0] == "Modify object permissions for:"
     assert asked[1] == "Select objects to define permissions for:"

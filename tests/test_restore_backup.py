@@ -66,7 +66,7 @@ def test_restore_backup_copies_files_and_creates_safety_backup(tmp_path):
     assert result["restored_profiles"] == ["Existing"]
     assert result["restored_permsets"] == ["Existing"]
     assert result["package_restored"] is True
-    assert result["errors"] == []
+    assert not result["errors"]
 
     # Safety backup captured the previous state
     safety_dir_candidates = [

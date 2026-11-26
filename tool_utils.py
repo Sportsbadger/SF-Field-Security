@@ -107,7 +107,7 @@ def run_command(
         if capture_output:
             if status_message:
                 click.echo(click.style(status_message, fg="cyan"))
-            process = subprocess.Popen(
+            process = subprocess.Popen(  # pylint: disable=consider-using-with
                 command_str,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -150,7 +150,7 @@ def run_command(
             merged_output = f"{stdout}{stderr or ''}"
             return CommandResult(success, returncode, merged_output, duration)
 
-        process = subprocess.Popen(
+        process = subprocess.Popen(  # pylint: disable=consider-using-with
             command_str,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -1026,7 +1026,7 @@ def choose_project_workspace(
     persistent_alias: str,
     action_prompt: str,
     create_choice_label: str,
-    update_choice_label: str,
+    update_choice_label: str,  # pylint: disable=unused-argument
     update_warning: str,
     post_delete_message: str | None = None,
     allow_use_without_refresh: bool = False,

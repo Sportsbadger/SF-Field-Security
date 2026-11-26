@@ -38,19 +38,20 @@ FS Tool Files Directory:
 
 """
 
-import shutil
-import datetime
 import csv
-from pathlib import Path
+import datetime
+import json
+import os
+import shutil
+import subprocess
+import sys
 import xml.etree.ElementTree as ET
+from collections import defaultdict
+from pathlib import Path
+from urllib.parse import unquote
+
 import click
 import questionary
-import sys
-from collections import defaultdict
-import os
-import subprocess
-import json
-from urllib.parse import unquote
 
 # --- Constants ---
 SF_NAMESPACE_URI = "http://soap.sforce.com/2006/04/metadata"
@@ -640,10 +641,7 @@ def format_access_display(readable: bool, editable: bool) -> str:
 def format_object_perms_display(perms: dict[str, bool]) -> str:
     """Formats object permissions dictionary into a 'c r u d VA MA' string."""
     display_parts = []
-    for i in range(len(OBJECT_PERM_TAGS)):
-        tag_name = OBJECT_PERM_TAGS[i]
-        short_char = OBJECT_PERM_SHORT[i]
-
+    for tag_name, short_char in zip(OBJECT_PERM_TAGS, OBJECT_PERM_SHORT):
         permission_is_granted = perms.get(
             tag_name, False
         )  # Default to False if key is missing
@@ -1160,7 +1158,6 @@ def _prepare_and_display_planned_fls_changes(
             else get_field_permissions_from_permissionset_root
         )
         changes_for_this_target_display = []
-        has_changes_for_this_item = False
         hdr_line_display = (
             f"{'Object.Field':<{field_col_width}}{'Current FLS':<16}{'New FLS':<12}"
         )
@@ -1195,7 +1192,6 @@ def _prepare_and_display_planned_fls_changes(
                     }
                 )
                 any_changes_planned_overall = True
-                has_changes_for_this_item = True
 
         if changes_for_this_target_display:
             click.echo(
@@ -1978,7 +1974,7 @@ def _apply_bulk_object_permission_modifications_to_files(
         target_item_name,
         changed_objects_for_item,
     ) in items_with_obj_perm_changes_map.items():
-        cached_root, item_type_str = item_xml_cache.get(target_item_name)
+        _, item_type_str = item_xml_cache.get(target_item_name)
 
         item_path_part = "profiles" if item_type_str == "Profile" else "permissionsets"
         item_suffix = (
@@ -2197,7 +2193,7 @@ def _offer_to_launch_report(report_path: Path):
         if sys.platform.startswith("darwin"):
             subprocess.run(["open", str(report_path)], check=False)
         elif os.name == "nt":
-            os.startfile(report_path)  # type: ignore[attr-defined]
+            os.startfile(report_path)  # pylint: disable=no-member
         else:
             subprocess.run(["xdg-open", str(report_path)], check=False)
     except Exception as exc:
@@ -2403,9 +2399,9 @@ def generate_field_security_report(meta: Path, base_dir: Path):
                         f"Processing object: {obj_name} ({len(fields_for_report)} fields selected for this object)"
                     )
 
-                field_type_map_for_obj = {
-                    fname: ftype for fname, ftype in list_fields(meta, obj_name)
-                }  # Get types once per object
+                field_type_map_for_obj = dict(
+                    list_fields(meta, obj_name)
+                )  # Get types once per object
                 for f_name in fields_for_report:
                     full_field_name = f"{obj_name}.{f_name}"
                     field_type = field_type_map_for_obj.get(f_name, "Unknown")
@@ -2459,8 +2455,7 @@ def generate_field_security_report(meta: Path, base_dir: Path):
                             f"Warning: Could not remove empty report file {output_filename}",
                             fg="yellow",
                         )
-                    )
-                    pass  # Continue if deletion fails
+                    )  # Continue if deletion fails
 
     except IOError as e:
         click.echo(click.style(f"\nError generating report: {e}", fg="red"))
@@ -3308,9 +3303,6 @@ def generate_object_permissions_report(meta: Path, base_dir: Path):
         max((max(len(t) for t in all_targets_sorted) if all_targets_sorted else 0), 20)
         + 2
     )
-    perms_display_width = (
-        len(format_object_perms_display({tag: True for tag in OBJECT_PERM_TAGS})) + 2
-    )
     header_console = f"{'Object Name':<{max_obj_name_len + 2}}" + "".join(
         [f"{target_name:<{target_col_width}}" for target_name in all_targets_sorted]
     )
@@ -3490,15 +3482,17 @@ def _run_soql(alias: str, soql: str) -> list[dict]:
     """Run a SOQL query through the Salesforce CLI and return its records."""
     command = ["sf", "data", "query", "--query", soql, "--target-org", alias, "--json"]
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=600)
+        proc = subprocess.run(
+            command, capture_output=True, text=True, timeout=600, check=False
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(f"Could not run the Salesforce CLI: {exc}") from exc
     try:
         payload = json.loads(proc.stdout or "")
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
         raise RuntimeError(
             proc.stderr.strip() or "Unexpected output from 'sf data query'."
-        )
+        ) from exc
     if proc.returncode != 0 or payload.get("status", 0) != 0:
         raise RuntimeError(
             payload.get("message") or proc.stderr.strip() or "Query failed."
@@ -4108,4 +4102,4 @@ def main(project, metadata, dry_run):
 
 
 if __name__ == "__main__":
-    main()
+    main()  # pylint: disable=no-value-for-parameter

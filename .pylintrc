@@ -1,0 +1,22 @@
+[MAIN]
+# The CLI is one large interactive module, so complexity, size and
+# documentation checks are not enforced. Real defects (unused variables,
+# undefined names, bad arguments, ...) are still reported.
+disable=
+    line-too-long,
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+    too-many-lines,
+    too-many-locals,
+    too-many-branches,
+    too-many-statements,
+    too-many-arguments,
+    too-many-positional-arguments,
+    too-many-return-statements,
+    duplicate-code,
+    redefined-outer-name,
+    broad-exception-caught,
+    mixed-line-endings,
+    wrong-import-position,
+    no-else-return
