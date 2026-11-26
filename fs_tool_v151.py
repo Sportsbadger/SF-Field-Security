@@ -3940,8 +3940,8 @@ def generate_all_users_field_access_report(meta_base: Path, fs_tool_files_dir: P
                     "Active",
                     "Profile",
                     "Profile Metadata Found",
-                    "Permission Set Groups",
                     "Permission Sets Used",
+                    "Permission Set Groups",
                     "Permission Sets Without Metadata",
                 ]
             )
@@ -3953,8 +3953,8 @@ def generate_all_users_field_access_report(meta_base: Path, fs_tool_files_dir: P
                         "Yes" if user["active"] else "No",
                         user["profile"],
                         "Yes" if user["profile_file"] else "No",
-                        "; ".join(user["groups"]),
                         "; ".join(user["permset_files"]),
+                        "; ".join(user["groups"]),
                         "; ".join(user["permset_missing"]),
                     ]
                 )
